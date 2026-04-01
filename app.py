@@ -405,21 +405,17 @@ def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7
         logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
         sync_in_progress = True
         try:
-            # 调用 TruthSocialMonitor 中新的历史帖子抓取方法，该方法使用 Selenium 模拟滚动来获取历史数据。
-            # 注意：此方法会启动一个无头浏览器实例，相对更耗费资源和时间。
-            # 实际的 Truth Social 网站结构可能会变化，导致抓取逻辑失效，需要定期检查和更新。
-            # max_scrolls 和 max_posts_per_user 参数可以在 monitor.py 中调整。
-
-            logging.warning("注意：当前的 TruthSocialMonitor.fetch_latest_posts 方法可能无法有效获取所有历史7天内容。")
-            logging.warning("它通常只抓取页面上可见的最新帖子。要实现完整的历史同步，需要更复杂的抓取逻辑。")
+            # 这是一个简化的同步逻辑。
+            # 使用 fetch_historical_posts_selenium 来获取指定天数内的历史帖子。
+            logging.info(f"使用 Selenium 抓取 @{username} 最近 {days_to_sync} 天的历史帖子。")
 
             for username in accounts_to_sync:
                 logging.info(f"正在同步用户 @{username} 的内容...")
                 # 假设 fetch_latest_posts 能够获取到足够多的帖子，
                 # 并且数据库的 is_post_seen 会处理重复。
                 # 理想情况下，这里应该有一个专门用于历史抓取的方法，
-                # 能够处理分页或日期范围。现在我们使用 Selenium 方法。
-                posts = monitor_instance.fetch_historical_posts_selenium(username, days_to_sync=days_to_sync)
+                # 能够处理分页或日期范围。
+                posts = monitor_instance.fetch_historical_posts_selenium(username, days_to_sync)
                 for post in posts:
                     if database.add_post(post): # add_post 会自动检查是否已存在
                         logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
