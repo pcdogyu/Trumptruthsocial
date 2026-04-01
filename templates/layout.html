@@ -14,15 +14,16 @@
             display: flex; flex-direction: column; /* Make body a flex container */
             padding-top: 70px; /* Space for fixed navbar */
             overflow-y: auto; /* Enable scrolling for the entire body if content overflows */
+            padding-bottom: 20px; /* Add some padding at the bottom for content above footer */
         }
         .footer {
             /* 页脚不再是固定的，而是 flex 布局的一部分 */
             width: 100%;
-            height: 60px; /* Set the fixed height of the footer here */
-            line-height: 60px; /* Vertically center the text there */
+            line-height: 1.5; /* Adjust line height for better text display */
             background-color: #f5f5f5;
             text-align: center;
             flex-shrink: 0; /* 防止页脚在 flex 容器中收缩 */
+            padding: 10px 0; /* Add some padding instead of fixed height */
         }
         .post-card {
             margin-bottom: 20px;

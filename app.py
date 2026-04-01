@@ -123,15 +123,20 @@ def create_templates_if_not_exists():
     <title>{% block title %}TruthSocial Monitor{% endblock %}</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
+        html, body {
+            height: 100%; /* Make html and body take full viewport height */
+            margin: 0;
+        }
         body { padding-top: 70px; }
         .footer {
-            position: fixed;
-            bottom: 0;
+            /* 页脚不再是固定的，而是 flex 布局的一部分 */
             width: 100%;
-            height: 60px; /* Set the fixed height of the footer here */
+            /* height: 60px; REMOVED - let content define height */
             line-height: 60px; /* Vertically center the text there */
             background-color: #f5f5f5;
             text-align: center;
+            flex-shrink: 0; /* 防止页脚在 flex 容器中收缩 */
+            padding: 10px 0; /* Add some padding instead of fixed height */
         }
         .post-card {
             margin-bottom: 20px;
@@ -195,7 +200,7 @@ def create_templates_if_not_exists():
         </div>
     </nav>
 
-    <main role="main" class="container">
+    <main role="main" class="container" style="flex-grow: 1;">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -280,8 +285,9 @@ def create_templates_if_not_exists():
 <h1 class="mt-5">历史内容</h1>
 
 <div class="mb-3">
-    <button id="syncHistoricalButton" class="btn btn-info">同步最近7天内容</button>
-    <button id="syncLatestButton" class="btn btn-primary ml-2">同步最近一条</button>
+    <button id="syncLatestButton" class="btn btn-primary">同步最新一条</button>
+    <button id="sync3DaysButton" class="btn btn-info ml-2">同步最近3天内容</button>
+    <button id="syncHistoricalButton" class="btn btn-info ml-2">同步最近7天内容</button>
     <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近的帖子。</small>
 </div>
 
@@ -617,14 +623,14 @@ sync_thread = None
 sync_in_progress = False
 sync_lock = threading.Lock() # 用于保护 sync_in_progress
 
-def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7):
+def _sync_worker(monitor_instance, accounts_to_sync, days_to_sync=7):
     """
     后台同步工作函数。
     注意：这个函数需要一个 TruthSocialMonitor 实例，并且能够获取到配置。
     为了避免循环导入，这里假设 monitor_instance 已经传入。
     """
     global sync_in_progress, sync_lock
-    with app.app_context(): # 直接使用 app.app_context()
+    with app.app_context():
         try:
             logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
             with sync_lock:
@@ -645,13 +651,10 @@ def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7
             
             if sync_successful:
                 logging.info(f"最近 {days_to_sync} 天内容同步完成。")
-                flash('内容同步成功！', 'success')
             else:
-                flash('部分内容同步失败，请查看日志获取详情。', 'warning')
-
+                logging.warning('部分内容同步失败，请查看日志获取详情。')
         except Exception as e:
             logging.error(f"同步历史内容时发生全局错误: {e}")
-            flash(f'内容同步失败: {e}', 'danger')
         finally:
             with sync_lock:
                 sync_in_progress = False
@@ -668,6 +671,10 @@ def sync_content():
     if not accounts_to_monitor:
         return jsonify({'status': 'error', 'message': '没有配置要监控的账户，无法同步。'}), 400
 
+    # 从请求中获取同步天数，默认为 7
+    request_data = request.get_json() or {}
+    days_to_sync = request_data.get('days', 7)
+
     # 导入 TruthSocialMonitor 类
     # 避免循环导入，这里假设 monitor.py 可以在需要时被导入
     # 或者，更好的做法是将 monitor_worker 封装成一个可调用的函数，并传入必要的依赖
@@ -680,66 +687,17 @@ def sync_content():
 
     # 在新线程中启动同步任务
     # 不再传递 app_context，线程函数内部会自行获取
-    sync_thread = threading.Thread(target=_sync_worker, args=(monitor_instance, accounts_to_monitor, 7))
+    sync_thread = threading.Thread(target=_sync_worker, args=(monitor_instance, accounts_to_monitor, days_to_sync))
     sync_thread.daemon = True # 设置为守护线程，主程序退出时自动终止
     sync_thread.start()
 
-    return jsonify({'status': 'success', 'message': '同步任务已在后台启动。请稍后刷新页面查看结果。'}), 200
-
-# 全局变量，用于控制“同步最近一条”线程
-sync_latest_thread = None
-sync_latest_in_progress = False
-sync_latest_lock = threading.Lock() # 用于保护 sync_latest_in_progress
-
-def _sync_latest_worker(app_context, monitor_instance, accounts_to_sync):
-    """
-    后台同步最近一条帖子工作函数。
-    """
-    global sync_latest_in_progress, sync_latest_lock
-    with app.app_context(): # 直接使用 app.app_context()
-        try:
-            logging.info("开始同步所有监控账户的最近一条帖子...")
-            with sync_latest_lock:
-                sync_latest_in_progress = True
-            
-            sync_successful = True
-            for username in accounts_to_sync:
-                logging.info(f"正在同步用户 @{username} 的最近一条帖子...")
-                try:
-                    # 调用 fetch_latest_posts，它使用 requests 快速获取最新帖子
-                    posts = monitor_instance.fetch_latest_posts(username)
-                    if posts:
-                        # 遍历所有获取到的帖子，并添加到数据库（add_post会处理去重）
-                        for post in posts:
-                            if database.add_post(post):
-                                logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
-                        time.sleep(0.5) # 短暂延时
-                    else:
-                        logging.info(f"未获取到用户 @{username} 的最新帖子。")
-                except Exception as e:
-                    logging.error(f"同步用户 @{username} 的最近一条帖子时发生错误: {e}")
-                    sync_successful = False
-            
-            if sync_successful:
-                logging.info("所有监控账户的最近一条帖子同步完成。")
-                flash('最近一条帖子同步成功！', 'success')
-            else:
-                flash('部分最近一条帖子同步失败，请查看日志获取详情。', 'warning')
-
-        except Exception as e:
-            logging.error(f"同步最近一条帖子时发生全局错误: {e}")
-            flash(f'同步最近一条帖子失败: {e}', 'danger')
-        finally:
-            with sync_latest_lock:
-                sync_latest_in_progress = False
+    return jsonify({'status': 'success', 'message': f'同步最近 {days_to_sync} 天内容的任务已启动。请稍后手动刷新页面。'}), 200
 
 @app.route('/sync_latest_post', methods=['POST'])
 def sync_latest_post():
-    global sync_latest_thread, sync_latest_in_progress, sync_latest_lock
-    with sync_latest_lock:
-        if sync_latest_in_progress:
-            return jsonify({'status': 'info', 'message': '同步最近一条帖子操作正在进行中，请稍候。'}), 202
-
+    """
+    同步执行“同步最新一条”操作并立即返回结果。
+    """
     config = get_current_config()
     accounts_to_monitor = config.get('accounts_to_monitor', [])
     if not accounts_to_monitor:
@@ -752,9 +710,33 @@ def sync_latest_post():
         logging.error(f"无法创建 TruthSocialMonitor 实例: {e}")
         return jsonify({'status': 'error', 'message': f'无法初始化监控器: {e}'}), 500
 
-    app_context = app.app_context()
-    sync_latest_thread = threading.Thread(target=_sync_latest_worker, args=(monitor_instance, accounts_to_monitor)) # 不再传递 app_context
-    sync_latest_thread.daemon = True
-    sync_latest_thread.start()
+    new_posts_count = 0
+    sync_errors = False
+    logging.info("开始同步所有监控账户的最新帖子...")
 
-    return jsonify({'status': 'success', 'message': '同步最近一条帖子任务已在后台启动。请稍后刷新页面查看结果。'}), 200
+    for username in accounts_to_monitor:
+        logging.info(f"正在同步用户 @{username} 的最新帖子...")
+        try:
+            posts = monitor_instance.fetch_latest_posts(username)
+            if not posts:
+                logging.info(f"未获取到用户 @{username} 的最新帖子。")
+                continue
+            
+            for post in posts:
+                if database.add_post(post):
+                    new_posts_count += 1
+            time.sleep(0.2) # Small delay
+        except Exception as e:
+            logging.error(f"同步用户 @{username} 的最新帖子时发生错误: {e}")
+            sync_errors = True
+
+    if sync_errors:
+        return jsonify({'status': 'warning', 'message': '同步期间发生错误，请检查日志。', 'new_posts': new_posts_count}), 200
+
+    if new_posts_count > 0:
+        message = f"同步完成，找到 {new_posts_count} 条新帖子。"
+    else:
+        message = "同步完成，没有发现新的帖子。"
+    
+    logging.info(message)
+    return jsonify({'status': 'success', 'message': message, 'new_posts': new_posts_count}), 200

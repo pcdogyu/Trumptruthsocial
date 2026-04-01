@@ -6,8 +6,10 @@
 <h1 class="mt-5">历史内容</h1>
 
 <div class="mb-3">
-    <button id="syncHistoricalButton" class="btn btn-info">同步最近7天内容</button>
-    <button id="syncLatestButton" class="btn btn-primary ml-2">同步最近一条</button>
+    <div id="sync-message-area" class="mb-2"></div>
+    <button id="syncLatestButton" class="btn btn-primary">同步最新一条</button>
+    <button id="sync3DaysButton" class="btn btn-info ml-2">同步最近3天内容</button>
+    <button id="syncHistoricalButton" class="btn btn-info ml-2">同步最近7天内容</button>
     <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近的帖子。</small>
 </div>
 
@@ -55,36 +57,72 @@
 {% block scripts %}
 <script>
     $(document).ready(function() {
-        $('#syncHistoricalButton').on('click', function() {
-            $(this).prop('disabled', true).text('同步中...');
+        // Helper function to display messages
+        function displaySyncMessage(message, type = 'info') {
+            var alertClass = 'alert-' + type;
+            var messageHtml = '<div class="alert ' + alertClass + ' alert-dismissible fade show" role="alert">' +
+                message +
+                '<button type="button" class="close" data-dismiss="alert" aria-label="Close">' +
+                '<span aria-hidden="true">&times;</span>' +
+                '</button>' +
+                '</div>';
+            $('#sync-message-area').html(messageHtml);
+            setTimeout(function() {
+                $('#sync-message-area .alert').alert('close');
+            }, 5000); // Message disappears after 5 seconds
+        }
+
+        // Refactored function for historical sync
+        function syncHistorical(days, button) {
+            var $button = $(button);
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('同步中...');
             $.ajax({
                 url: '{{ url_for("sync_content") }}',
                 type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ days: days }),
                 success: function(response) {
-                    $('#syncHistoricalButton').prop('disabled', false).text('同步最近7天内容');
-                    if (response.status === 'success') {
-                        location.reload(); // 同步成功后刷新页面
-                    }
+                    displaySyncMessage(response.message, 'info');
                 },
                 error: function(xhr, status, error) {
-                    $('#syncHistoricalButton').prop('disabled', false).text('同步最近7天内容');
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "同步请求失败。";
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    // Re-enable button even on error, but don't reload
+                    $button.prop('disabled', false).text(originalText);
                 }
             });
+        }
+
+        $('#syncHistoricalButton').on('click', function() {
+            syncHistorical(7, this);
+        });
+
+        $('#sync3DaysButton').on('click', function() {
+            syncHistorical(3, this);
         });
 
         $('#syncLatestButton').on('click', function() {
-            $(this).prop('disabled', true).text('同步中...');
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('同步中...');
             $.ajax({
                 url: '{{ url_for("sync_latest_post") }}',
                 type: 'POST',
                 success: function(response) {
-                    $('#syncLatestButton').prop('disabled', false).text('同步最近一条');
-                    if (response.status === 'success') {
-                        location.reload(); // 同步成功后刷新页面
+                    displaySyncMessage(response.message, response.status);
+                    if (response.new_posts > 0) {
+                        setTimeout(function() { location.reload(); }, 1500); // Reload after 1.5s to show new posts
                     }
                 },
                 error: function(xhr, status, error) {
-                    $('#syncLatestButton').prop('disabled', false).text('同步最近一条');
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "同步最新帖子失败。";
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
                 }
             });
         });
