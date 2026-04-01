@@ -166,7 +166,12 @@ class TruthSocialMonitor:
                     if len(content) > 1000: content = content[:1000] + "..."
                 
                 web_url_element = element.select_one(self.post_web_url_anchor_selector)
-                web_url = web_url_element['href'] if web_url_element and 'href' in web_url_element.attrs else profile_url
+                if web_url_element and 'href' in web_url_element.attrs:
+                    web_url = web_url_element['href']
+                    if web_url.startswith('/'):
+                        web_url = f"https://truthsocial.com{web_url}"
+                else:
+                    web_url = f"https://truthsocial.com/@{username}/posts/{post_id}"
 
                 # --- 新增：检查视频 ---
                 video_url = None
@@ -274,7 +279,12 @@ class TruthSocialMonitor:
                     if len(content) > 1000: content = content[:1000] + "..."
                 
                 web_url_element = element.select_one(self.post_web_url_anchor_selector)
-                web_url = web_url_element['href'] if web_url_element and 'href' in web_url_element.attrs else profile_url + f"/{post_id}"
+                if web_url_element and 'href' in web_url_element.attrs:
+                    web_url = web_url_element['href']
+                    if web_url.startswith('/'):
+                        web_url = f"https://truthsocial.com{web_url}"
+                else:
+                    web_url = f"https://truthsocial.com/@{username}/posts/{post_id}"
 
                 video_url = None
                 video_container = element.select_one(self.video_container_div_selector) 
