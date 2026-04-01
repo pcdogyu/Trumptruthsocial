@@ -1,0 +1,25 @@
+# TruthSocial Monitor Configuration
+
+# 要监控的 Truth Social 账户列表
+accounts_to_monitor:
+  - "realDonaldTrump"
+  # - "another_username"
+
+# Truth Social 认证设置 (可选)
+# 如果您有 Bearer Token，可以填入这里以进行认证抓取
+auth:
+  bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN"
+
+# Telegram 通知设置
+telegram:
+  bot_token: "YOUR_TELEGRAM_BOT_TOKEN" # 从 BotFather 获取
+  chat_id: "YOUR_TELEGRAM_CHAT_ID" # 接收消息的群组或用户ID
+
+# AI 分析设置 (例如使用 DeepSeek 或 OpenAI)
+ai_analysis:
+  enabled: false
+  api_key: "YOUR_AI_API_KEY"
+  prompt: "Summarize the main point of the following text in one short sentence:"
+
+# 刷新间隔 (例如 "5m" 代表 5 分钟, "1h" 代表 1 小时)
+refresh_interval: "5m"

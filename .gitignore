@@ -1,0 +1,9 @@
+# Ignore configuration files with sensitive data
+config.yaml
+
+# Ignore local database files
+*.db
+*.db-journal
+
+# Ignore Python cache files
+__pycache__/
