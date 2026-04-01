@@ -43,6 +43,8 @@ selectors:
   video_tag: 'video'
   # Selector for the source tag within a video tag (for video URL)
   video_source_tag: 'source'
+  # Selector for "Show more" or "Read more" buttons to expand long post text
+  show_more_button: '.status__content__read-more-button, button.read-more-button'
   # Selector for the time tag that holds the post timestamp
   post_timestamp_tag: 'time'
   # Attribute name that holds the datetime value within the post_timestamp_tag

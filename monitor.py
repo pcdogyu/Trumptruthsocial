@@ -12,6 +12,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 # 配置日志
@@ -48,18 +49,21 @@ class TruthSocialMonitor:
         self.video_container_div_selector = self.selectors.get('video_container_div', 'div.media-gallery__item-video-container')
         self.video_tag_selector = self.selectors.get('video_tag', 'video')
         self.video_source_tag_selector = self.selectors.get('video_source_tag', 'source')
+        self.show_more_button_selector = self.selectors.get('show_more_button', '.status__content__read-more-button')
         self.post_timestamp_tag_selector = self.selectors.get('post_timestamp_tag', 'time')
         self.post_timestamp_attribute = self.selectors.get('post_timestamp_attribute', 'datetime')
 
     def _init_selenium_driver(self):
         """初始化并返回一个 Selenium WebDriver 实例"""
         options = Options()
-        options.add_argument("--headless")  # 无头模式
+        options.add_argument("--headless=new")  # 使用更新的无头模式，更难被检测
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
-        options.add_experimental_option('excludeSwitches', ['enable-logging']) # 忽略不相关的日志
+        options.add_argument("--disable-blink-features=AutomationControlled") # 隐藏 WebDriver 特征
+        options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging']) 
+        options.add_experimental_option('useAutomationExtension', False)
         
         # 使用与 requests session 相同的 User-Agent 以保持一致性
         options.add_argument(f"user-agent={self.headers['User-Agent']}")
@@ -67,6 +71,11 @@ class TruthSocialMonitor:
         try:
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
+            
+            # 进一步抹除 navigator.webdriver 痕迹
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            })
             logging.info("Selenium WebDriver initialized.")
             return driver
         except Exception as e:
@@ -100,16 +109,44 @@ class TruthSocialMonitor:
 
     def fetch_latest_posts(self, username):
         """
-        使用 requests 抓取用户主页上可见的最新帖子。
-        此方法适用于快速检查新帖子，不适合深度历史抓取。
+        使用 Selenium 抓取用户主页上可见的最新帖子。
+        Truth Social 是动态渲染页面，且有 Cloudflare 保护，requests 容易失效。
         """
         profile_url = f"https://truthsocial.com/@{username}"
-        logging.info(f"Fetching latest posts (requests) from: {profile_url}")
-        try:
-            response = self.session.get(profile_url, timeout=15)
-            response.raise_for_status()
+        logging.info(f"Fetching latest posts (Selenium) from: {profile_url}")
+        
+        driver = self._init_selenium_driver()
+        if not driver:
+            return []
             
-            soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            driver.get(profile_url)
+            
+            # 智能等待：等待帖子容器元素出现，最多等待 15 秒。有助于穿透 Cloudflare 的 "Just a moment" 加载页。
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, self.post_container_selector))
+                )
+            except Exception:
+                logging.warning(f"等待帖子加载超时。当前网页标题为: '{driver.title}'")
+            
+            # 稍微向下滚动，触发可能的懒加载机制
+            driver.execute_script("window.scrollBy(0, 800);")
+            time.sleep(2)
+
+            # 模拟点击“展开更多”按钮，确保长文本内容完整
+            try:
+                click_script = f"""
+                document.querySelectorAll('{self.show_more_button_selector}').forEach(function(btn) {{
+                    if (btn.offsetParent !== null) btn.click();
+                }});
+                """
+                driver.execute_script(click_script)
+                time.sleep(0.5)
+            except Exception as e:
+                logging.debug(f"尝试点击'展开更多'按钮时发生错误: {e}")
+
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
             posts = []
 
             # Use configurable CSS selectors
@@ -147,11 +184,13 @@ class TruthSocialMonitor:
                     'web_url': web_url,
                     'video_url': video_url # 添加视频URL字段
                 })
-            logging.info(f"Found {len(posts)} latest posts for {username} using requests.")
+            logging.info(f"Found {len(posts)} latest posts for {username} using Selenium.")
             return posts
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Failed to fetch latest posts for {username} (requests): {e}")
+        except Exception as e:
+            logging.error(f"Failed to fetch latest posts for {username} (Selenium): {e}")
             return []
+        finally:
+            driver.quit() # 确保执行完毕后关闭浏览器释放内存
 
     def fetch_historical_posts_selenium(self, username, days_to_sync=7, max_scrolls=50, max_posts_per_user=500):
         """
@@ -189,6 +228,20 @@ class TruthSocialMonitor:
             if new_height == last_height:
                 logging.info(f"滚动后 @{username} 的页面高度未变化，可能已到达内容末尾。")
                 break
+
+            # --- 模拟点击“展开更多”按钮 ---
+            try:
+                # 使用 JavaScript 点击所有可见的“展开更多”按钮
+                # 这比使用 Selenium 的 click() 更稳健，不容易被遮挡拦截
+                click_script = f"""
+                document.querySelectorAll('{self.show_more_button_selector}').forEach(function(btn) {{
+                    if (btn.offsetParent !== null) btn.click();
+                }});
+                """
+                driver.execute_script(click_script)
+                time.sleep(0.5) # 给页面一点时间展开折叠的文本
+            except Exception as e:
+                logging.debug(f"尝试点击'展开更多'按钮时发生错误: {e}")
 
             # 解析当前页面源
             soup = BeautifulSoup(driver.page_source, 'html.parser')
