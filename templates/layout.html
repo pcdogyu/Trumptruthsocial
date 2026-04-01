@@ -6,15 +6,23 @@
     <title>{% block title %}TruthSocial Monitor{% endblock %}</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
-        body { padding-top: 70px; }
+        html, body {
+            height: 100%; /* Make html and body take full viewport height */
+            margin: 0;
+        }
+        body {
+            display: flex; flex-direction: column; /* Make body a flex container */
+            padding-top: 70px; /* Space for fixed navbar */
+            overflow-y: auto; /* Enable scrolling for the entire body if content overflows */
+        }
         .footer {
-            position: fixed;
-            bottom: 0;
+            /* 页脚不再是固定的，而是 flex 布局的一部分 */
             width: 100%;
             height: 60px; /* Set the fixed height of the footer here */
             line-height: 60px; /* Vertically center the text there */
             background-color: #f5f5f5;
             text-align: center;
+            flex-shrink: 0; /* 防止页脚在 flex 容器中收缩 */
         }
         .post-card {
             margin-bottom: 20px;
@@ -68,6 +76,12 @@
                 <li class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
                     <a class="nav-link" href="{{ url_for('index') }}">配置</a>
                 </li>
+                <li class="nav-item {% if request.endpoint == 'ai_config' %}active{% endif %}">
+                    <a class="nav-link" href="{{ url_for('ai_config') }}">AI 配置</a>
+                </li>
+                <li class="nav-item {% if request.endpoint == 'message_push' %}active{% endif %}">
+                    <a class="nav-link" href="{{ url_for('message_push') }}">消息推送</a>
+                </li>
                 <li class="nav-item {% if request.endpoint == 'content' %}active{% endif %}">
                     <a class="nav-link" href="{{ url_for('content') }}">内容</a>
                 </li>
@@ -75,7 +89,7 @@
         </div>
     </nav>
 
-    <main role="main" class="container">
+    <main role="main" class="container" style="flex-grow: 1;">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -93,7 +107,7 @@
 
     <footer class="footer">
         <div class="container">
-            <span class="text-muted">© 2023 TruthSocial Monitor</span>
+            <span class="text-muted">Code by Yuhao@jiansutech.com - {{ git_commit_info.time }} - {{ git_commit_info.hash }} - {{ git_commit_info.branch }}</span>
         </div>
     </footer>
 

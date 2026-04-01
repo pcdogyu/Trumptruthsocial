@@ -9,8 +9,9 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 ### Features
 
 *   **Multi-Account Monitoring**: Monitors multiple Truth Social accounts simultaneously.
-*   **Telegram Notifications**: Sends notifications to Telegram for new text and video posts.
+*   **Telegram Notifications**: Sends notifications to Telegram for new text and video posts. Telegram configuration is now managed on a dedicated "Message Push" page in the Web UI.
 *   **Web UI**: A Flask-based web interface for managing monitored accounts, API keys, and other settings.
+*   **AI Configuration Page**: Dedicated page in the Web UI for managing AI analysis settings, including API key and prompt.
 *   **Configurable Web Selectors**: CSS selectors used for scraping can now be configured in `config.yaml`, making the tool more resilient to website structure changes.
 *   **Authenticated Fetching**: Uses a Bearer Token to access content that may require authentication.
 *   **Token Helper**: Includes a script (`get_token.py`) to easily extract the Bearer Token from your browser after logging in.
@@ -43,7 +44,8 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **Get Bearer Token**: Run `python get_token.py`. This will open a Chrome browser. Log in to Truth Social manually. The script will automatically extract the token and print it to the console.
     *   **Fill `config.yaml`** (or use the Web UI later):
         *   `auth`: Paste the `bearer_token` you obtained.
-        *   `telegram`: Fill in your `bot_token` and `chat_id`.
+        *   `telegram`: Telegram `bot_token` and `chat_id` are now configured via the "消息推送" (Message Push) page in the Web UI.
+        *   `ai_analysis`: AI settings are now configured via the "AI 配置" (AI Config) page in the Web UI.
         *   You can leave `accounts_to_monitor` empty and add them via the Web UI.
 
 ### Usage
@@ -59,6 +61,8 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 
 4.  Use the Web UI to add/remove accounts to monitor and adjust other settings.
 
+    *   **AI Config Page**: Navigate to the "AI 配置" (AI Config) tab to configure AI settings.
+    *   **Message Push Page**: Navigate to the "消息推送" (Message Push) tab to configure Telegram settings.
     *   **Content Page**: Navigate to the "内容" (Content) tab to view historical posts.
     *   **Sync Button**: On the "内容" page, click "同步最近7天内容" to fetch more historical data.
 ---
@@ -72,8 +76,9 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 ### 功能特性
 
 *   **多账户监控**: 支持同时监控多个 Truth Social 账户。
-*   **Telegram 通知**: 当发现新帖子（文本或视频）时，发送通知到 Telegram。
+*   **Telegram 通知**: 当发现新帖子（文本或视频）时，发送通知到 Telegram。Telegram 配置现在通过 Web UI 中的“消息推送”页面进行管理。
 *   **Web UI**: 提供一个基于 Flask 的 Web 界面，用于管理监控列表、API 密钥和其他设置。
+*   **AI 配置页面**: Web UI 中新增专用页面，用于管理 AI 分析设置，包括 API 密钥和提示词。
 *   **可配置的网页选择器**: 用于网页抓取的 CSS 选择器现在可以在 `config.yaml` 中配置，使工具更能适应网站结构的变化。
 *   **认证抓取**: 使用 Bearer Token 获取需要登录才能查看的内容。
 *   **Token 获取助手**: 包含一个辅助脚本 (`get_token.py`)，可以在您登录后轻松从浏览器中提取 Bearer Token。
@@ -106,7 +111,8 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **获取 Bearer Token**: 运行 `python get_token.py`。脚本会打开一个 Chrome 浏览器，请手动登录 Truth Social。登录成功后，脚本会自动提取 Token 并打印在命令行中。
     *   **填写 `config.yaml`** (或稍后通过 Web UI 配置):
         *   `auth`: 粘贴你获取到的 `bearer_token`。
-        *   `telegram`: 填入你的 `bot_token` 和 `chat_id`。
+        *   `telegram`: Telegram 的 `bot_token` 和 `chat_id` 现在通过 Web UI 中的“消息推送”页面进行配置。
+        *   `ai_analysis`: AI 设置现在通过 Web UI 中的“AI 配置”页面进行配置。
         *   `accounts_to_monitor` 列表可以先留空，稍后通过 Web UI 添加。
 
 ### 运行程序
@@ -122,5 +128,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 
 4.  在 Web UI 中添加/删除需要监控的账户，或调整其他配置。
 
+    *   **AI 配置页面**: 导航到“AI 配置”选项卡以配置 AI 设置。
+    *   **消息推送页面**: 导航到“消息推送”选项卡以配置 Telegram 设置。
     *   **内容页面**: 导航到“内容”选项卡以查看历史帖子。
     *   **同步按钮**: 在“内容”页面上，点击“同步最近7天内容”以获取更多历史数据。

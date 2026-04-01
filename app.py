@@ -1,9 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g
 import yaml
 import os
 import logging
 import threading
 import time
+import requests
+import subprocess
+from datetime import datetime
 
 # 假设 database 模块已存在
 import database
@@ -78,6 +81,29 @@ def save_config(config_data, path=CONFIG_FILE):
     except Exception as e:
         logging.error(f"保存配置到 '{path}' 时出错: {e}")
         return False
+
+def get_git_commit_info():
+    """获取 git 提交信息。"""
+    try:
+        commit_time_unix = subprocess.check_output(['git', 'log', '-1', '--format=%ct']).strip().decode('utf-8')
+        commit_time = datetime.fromtimestamp(int(commit_time_unix)).strftime('%Y-%m-%d %H:%M:%S')
+        commit_hash = subprocess.check_output(['git', 'rev-parse', '--short=8', 'HEAD']).strip().decode('utf-8')
+        commit_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip().decode('utf-8')
+        return {
+            'time': commit_time,
+            'hash': commit_hash,
+            'branch': commit_branch
+        }
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        logging.warning("无法获取 git 提交信息。是否已安装 git 并且这是一个 git 仓库？")
+        return { 'time': 'N/A', 'hash': 'N/A', 'branch': 'N/A' }
+
+@app.context_processor
+def inject_git_info():
+    """将 git 提交信息注入到所有模板中。"""
+    if 'git_commit_info' not in g:
+        g.git_commit_info = get_git_commit_info()
+    return dict(git_commit_info=g.git_commit_info)
 
 def create_templates_if_not_exists():
     """创建必要的模板文件，如果它们不存在的话"""
@@ -330,6 +356,81 @@ def create_templates_if_not_exists():
 """)
         logging.info(f"Created {content_path}")
 
+    # message_push.html
+    message_push_path = os.path.join(TEMPLATES_DIR, 'message_push.html')
+    if not os.path.exists(message_push_path):
+        with open(message_push_path, 'w', encoding='utf-8') as f:
+            f.write("""
+{% extends "layout.html" %}
+
+{% block title %}消息推送配置{% endblock %}
+
+{% block content %}
+<h1 class="mt-5">消息推送配置</h1>
+
+<form method="POST" action="{{ url_for('save_message_push_config_route') }}">
+    <div class="form-group">
+        <label for="bot_token">Telegram Bot Token:</label>
+        <input type="text" class="form-control" id="bot_token" name="bot_token" value="{{ masked_bot_token }}">
+        <small class="form-text text-muted">从 BotFather 获取的 Telegram 机器人令牌。</small>
+    </div>
+
+    <div class="form-group">
+        <label for="chat_id">Telegram Chat ID:</label>
+        <input type="text" class="form-control" id="chat_id" name="chat_id" value="{{ config.telegram.chat_id if config.telegram else '' }}">
+        <small class="form-text text-muted">接收通知的 Telegram 聊天 ID。</small>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存配置</button>
+    <button type="button" class="btn btn-secondary ml-2" id="testMessageButton">消息测试</button>
+    <span id="testMessageResult" class="ml-2 align-middle"></span>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        $('#testMessageButton').on('click', function() {
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('测试中...');
+
+            $.ajax({
+                url: '{{ url_for("test_telegram_message") }}',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    bot_token: $('#bot_token').val(),
+                    chat_id: $('#chat_id').val()
+                }),
+                success: function(response) {
+                    var $result = $('#testMessageResult');
+                    $result.text(response.message).removeClass('text-danger').addClass('text-success');
+                    setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
+                },
+                error: function(xhr, status, error) {
+                    var errorMessage = '测试失败';
+                    try {
+                        var errorJson = JSON.parse(xhr.responseText);
+                        errorMessage += ': ' + errorJson.message;
+                    } catch (e) {
+                        errorMessage += ': ' + xhr.responseText;
+                    }
+                    var $result = $('#testMessageResult');
+                    $result.text(errorMessage).removeClass('text-success').addClass('text-danger');
+                    setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}
+""")
+        logging.info(f"Created {message_push_path}")
+
 # Flask Routes
 @app.route('/')
 def index():
@@ -370,16 +471,6 @@ def save_config_route():
     if 'auth' not in new_config:
         new_config['auth'] = {}
     submitted_bearer_token = request.form.get('bearer_token', '').strip()
-    if '*' not in submitted_bearer_token: # 如果提交的 Token 不包含星号，说明用户修改了
-        new_config['auth']['bearer_token'] = submitted_bearer_token
-    elif not submitted_bearer_token: # 如果用户提交的是空字符串
-        new_config['auth']['bearer_token'] = ''
-    # 否则，保持原有的 Token 不变 (因为显示的是遮蔽后的)
-
-    # 更新 telegram
-    if 'telegram' not in new_config:
-        new_config['telegram'] = {}
-    submitted_bot_token = request.form.get('bot_token', '').strip()
     if '*' not in submitted_bot_token: # 如果提交的 Token 不包含星号，说明用户修改了
         new_config['telegram']['bot_token'] = submitted_bot_token
     elif not submitted_bot_token: # 如果用户提交的是空字符串
@@ -411,6 +502,114 @@ def content():
     
     usernames = database.get_unique_usernames()
     return render_template('content.html', posts=posts, usernames=usernames, selected_username=selected_username)
+
+@app.route('/message_push')
+def message_push():
+    config = get_current_config()
+    telegram_bot_token = config.get('telegram', {}).get('bot_token', '')
+    masked_bot_token = mask_api_key(telegram_bot_token)
+    return render_template('message_push.html', config=config, masked_bot_token=masked_bot_token)
+
+@app.route('/save_message_push_config', methods=['POST'])
+def save_message_push_config_route():
+    new_config = get_current_config()
+
+    if 'telegram' not in new_config:
+        new_config['telegram'] = {}
+    
+    submitted_bot_token = request.form.get('bot_token', '').strip()
+    if '*' not in submitted_bot_token:
+        new_config['telegram']['bot_token'] = submitted_bot_token
+    elif not submitted_bot_token:
+        new_config['telegram']['bot_token'] = ''
+    
+    new_config['telegram']['chat_id'] = request.form.get('chat_id', '').strip()
+
+    if save_config(new_config):
+        flash('消息推送配置已成功保存！', 'success')
+    else:
+        flash('保存消息推送配置失败！', 'danger')
+    return redirect(url_for('message_push'))
+
+def _send_telegram_message_internal(bot_token, chat_id, text):
+    """
+    内部辅助函数，用于发送 Telegram 消息。
+    """
+    api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True
+    }
+    try:
+        response = requests.post(api_url, data=payload, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        if result.get('ok'):
+            logging.info(f"Test Telegram message sent successfully to Chat ID: {chat_id}")
+            return True, "测试消息发送成功！"
+        else:
+            logging.error(f"Telegram API error (test message): {result.get('description')}")
+            return False, f"Telegram API 错误: {result.get('description')}"
+    except requests.exceptions.RequestException as e:
+        logging.error(f"发送 Telegram 测试消息时网络错误: {e}")
+        return False, f"网络错误: {e}"
+
+@app.route('/test_telegram_message', methods=['POST'])
+def test_telegram_message():
+    request_data = request.get_json()
+    submitted_bot_token = request_data.get('bot_token', '').strip()
+    submitted_chat_id = request_data.get('chat_id', '').strip()
+
+    if not submitted_chat_id:
+        return jsonify({'status': 'error', 'message': 'Chat ID 不能为空。'}), 400
+
+    # 如果提交的 token 包含星号，说明用户未修改，应使用已保存的真实 token
+    if '*' in submitted_bot_token:
+        current_config = get_current_config()
+        bot_token_to_use = current_config.get('telegram', {}).get('bot_token')
+    else:
+        bot_token_to_use = submitted_bot_token
+
+    if not bot_token_to_use:
+        return jsonify({'status': 'error', 'message': 'Bot Token 未配置或无效。请先保存配置。'}), 400
+
+    test_message_text = "这是一个来自 TruthSocial Monitor 的测试消息！"
+    success, message = _send_telegram_message_internal(bot_token_to_use, submitted_chat_id, test_message_text)
+
+    if success:
+        return jsonify({'status': 'success', 'message': message}), 200
+    else:
+        return jsonify({'status': 'error', 'message': message}), 500
+
+@app.route('/ai_config')
+def ai_config():
+    config = get_current_config()
+    ai_api_key = config.get('ai_analysis', {}).get('api_key', '')
+    masked_ai_api_key = mask_api_key(ai_api_key)
+    return render_template('ai_config.html', config=config, masked_ai_api_key=masked_ai_api_key)
+
+@app.route('/save_ai_config', methods=['POST'])
+def save_ai_config_route():
+    new_config = get_current_config()
+
+    if 'ai_analysis' not in new_config:
+        new_config['ai_analysis'] = {}
+    
+    new_config['ai_analysis']['enabled'] = 'ai_enabled' in request.form 
+    submitted_ai_api_key = request.form.get('ai_api_key', '').strip()
+    if '*' not in submitted_ai_api_key:
+        new_config['ai_analysis']['api_key'] = submitted_ai_api_key
+    elif not submitted_ai_api_key:
+        new_config['ai_analysis']['api_key'] = ''
+    new_config['ai_analysis']['prompt'] = request.form.get('ai_prompt', '').strip()
+
+    if save_config(new_config):
+        flash('AI 配置已成功保存！', 'success')
+    else:
+        flash('保存 AI 配置失败！', 'danger')
+    return redirect(url_for('ai_config'))
 
 # 全局变量，用于控制同步线程
 # 同样需要锁来保护 sync_in_progress

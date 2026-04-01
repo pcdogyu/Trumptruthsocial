@@ -1,0 +1,30 @@
+{% extends "layout.html" %}
+
+{% block title %}AI 配置{% endblock %}
+
+{% block content %}
+<h1 class="mt-5">AI 配置</h1>
+
+<form method="POST" action="{{ url_for('save_ai_config_route') }}">
+    <fieldset class="form-group border p-3 mb-3">
+        <legend class="w-auto px-2">AI 分析设置</legend>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="ai_enabled" name="ai_enabled" {{ 'checked' if config.ai_analysis and config.ai_analysis.enabled else '' }}>
+            <label class="form-check-label" for="ai_enabled">启用 AI 分析</label>
+            <small class="form-text text-muted">勾选此项以启用 AI 对帖子内容的分析。</small>
+        </div>
+        <div class="form-group">
+            <label for="ai_api_key">AI API Key:</label>
+            <input type="text" class="form-control" id="ai_api_key" name="ai_api_key" value="{{ masked_ai_api_key }}">
+            <small class="form-text text-muted">仅显示开头和结尾的四位字符。修改将覆盖现有密钥。</small>
+        </div>
+        <div class="form-group">
+            <label for="ai_prompt">AI 分析提示词:</label>
+            <textarea class="form-control" id="ai_prompt" name="ai_prompt" rows="3">{{ config.ai_analysis.prompt if config.ai_analysis and config.ai_analysis.prompt else '' }}</textarea>
+            <small class="form-text text-muted">发送给 AI 的指令，用于分析帖子内容。</small>
+        </div>
+    </fieldset>
+
+    <button type="submit" class="btn btn-primary">保存 AI 配置</button>
+</form>
+{% endblock %}
