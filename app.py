@@ -746,3 +746,44 @@ def sync_latest_post():
     
     logging.info(message)
     return jsonify({'status': 'success', 'message': message, 'new_posts': new_posts_count}), 200
+
+@app.route('/delete_post/<post_id>', methods=['POST'])
+def delete_post_route(post_id):
+    if database.delete_post(post_id):
+        flash(f'Post {post_id} has been deleted from the local database.', 'success')
+        return jsonify({'status': 'success', 'message': f'Post {post_id} deleted.'})
+    else:
+        return jsonify({'status': 'error', 'message': f'Could not delete post {post_id}. It may have already been deleted.'}), 500
+
+@app.route('/forward_post/<post_id>', methods=['POST'])
+def forward_post_route(post_id):
+    post = database.get_post_by_id(post_id)
+    if not post:
+        return jsonify({'status': 'error', 'message': 'Post not found in database.'}), 404
+
+    config = get_current_config()
+    bot_token = config.get('telegram', {}).get('bot_token')
+    chat_id = config.get('telegram', {}).get('chat_id')
+
+    if not bot_token or not chat_id:
+        return jsonify({'status': 'error', 'message': 'Telegram bot not configured.'}), 500
+
+    # Construct message based on user request
+    if post.get('video_url'):
+        # Request 6: If video, forward the video link as text
+        message = f"<b>Forwarded Video from @{post['username']}:</b>\n\n" \
+                  f"{post['content']}\n\n" \
+                  f"<b>Video Link:</b> {post['video_url']}\n\n" \
+                  f"<a href='{post['web_url']}'>View Original Post</a>"
+    else:
+        message = f"<b>Forwarded Post from @{post['username']}:</b>\n\n" \
+                  f"{post['content']}\n\n" \
+                  f"<a href='{post['web_url']}'>View Original Post</a>"
+
+    # Use the internal sending function
+    success, response_message = _send_telegram_message_internal(bot_token, chat_id, message)
+
+    if success:
+        return jsonify({'status': 'success', 'message': 'Post forwarded to Telegram.'})
+    else:
+        return jsonify({'status': 'error', 'message': f'Failed to forward to Telegram: {response_message}'}), 500

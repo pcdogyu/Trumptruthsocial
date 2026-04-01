@@ -43,6 +43,10 @@ selectors:
   video_tag: 'video'
   # Selector for the source tag within a video tag (for video URL)
   video_source_tag: 'source'
+  # Selector for the header of a post to be removed before text extraction
+  post_header_to_remove: 'div.status__header'
+  # Selector for the action bar/footer of a post to be removed
+  post_footer_to_remove: 'div.status__action-bar'
   # Selector for "Show more" or "Read more" buttons to expand long post text
   show_more_button: '.status__content__read-more-button, button.read-more-button'
   # Selector for the time tag that holds the post timestamp

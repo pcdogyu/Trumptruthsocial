@@ -49,6 +49,8 @@ class TruthSocialMonitor:
         self.video_container_div_selector = self.selectors.get('video_container_div', 'div.media-gallery__item-video-container')
         self.video_tag_selector = self.selectors.get('video_tag', 'video')
         self.video_source_tag_selector = self.selectors.get('video_source_tag', 'source')
+        self.post_header_selector = self.selectors.get('post_header_to_remove', 'div.status__header')
+        self.post_footer_selector = self.selectors.get('post_footer_to_remove', 'div.status__action-bar')
         self.show_more_button_selector = self.selectors.get('show_more_button', '.status__content__read-more-button')
         self.post_timestamp_tag_selector = self.selectors.get('post_timestamp_tag', 'time')
         self.post_timestamp_attribute = self.selectors.get('post_timestamp_attribute', 'datetime')
@@ -157,12 +159,22 @@ class TruthSocialMonitor:
                 if not post_id:
                     continue # 如果没有 ID 则跳过
 
+                # --- Clean the element before extracting text ---
+                header_to_remove = element.select_one(self.post_header_selector)
+                if header_to_remove:
+                    header_to_remove.decompose() # Removes the tag from the tree
+
+                footer_to_remove = element.select_one(self.post_footer_selector)
+                if footer_to_remove:
+                    footer_to_remove.decompose()
+
                 content_element = element.select_one(self.post_content_div_selector)
                 content = content_element.get_text(strip=True) if content_element else ''
                 
                 # 备用方案：如果未找到特定 div 的内容，直接提取整个 article 块的文本
                 if not content:
-                    content = element.get_text(separator='\n', strip=True)
+                    # The fallback is now safer because header/footer are gone
+                    content = '\n'.join([line for line in element.get_text(separator='\n', strip=True).split('\n') if line.strip()])
                     if len(content) > 1000: content = content[:1000] + "..."
                 
                 web_url_element = element.select_one(self.post_web_url_anchor_selector)
@@ -270,12 +282,22 @@ class TruthSocialMonitor:
                     stop_fetching = True
                     break # 停止处理当前滚动中的帖子，并跳出外部滚动循环
 
+                # --- Clean the element before extracting text ---
+                header_to_remove = element.select_one(self.post_header_selector)
+                if header_to_remove:
+                    header_to_remove.decompose()
+
+                footer_to_remove = element.select_one(self.post_footer_selector)
+                if footer_to_remove:
+                    footer_to_remove.decompose()
+
                 content_element = element.select_one(self.post_content_div_selector)
                 content = content_element.get_text(strip=True) if content_element else ''
                 
                 # 备用方案：如果未找到特定 div 的内容，直接提取整个 article 块的文本
                 if not content:
-                    content = element.get_text(separator='\n', strip=True)
+                    # The fallback is now safer because header/footer are gone
+                    content = '\n'.join([line for line in element.get_text(separator='\n', strip=True).split('\n') if line.strip()])
                     if len(content) > 1000: content = content[:1000] + "..."
                 
                 web_url_element = element.select_one(self.post_web_url_anchor_selector)

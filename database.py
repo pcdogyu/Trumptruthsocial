@@ -91,6 +91,41 @@ def add_post(post_data):
     finally:
         conn.close()
 
+def delete_post(post_id):
+    """Deletes a post from the database by its ID."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('DELETE FROM posts WHERE id = ?', (post_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            logging.info(f"Post {post_id} deleted from the database.")
+            return True
+        else:
+            logging.warning(f"Attempted to delete post {post_id}, but it was not found.")
+            return False
+    except sqlite3.Error as e:
+        logging.error(f"Error deleting post {post_id} from database: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_post_by_id(post_id):
+    """Fetches a single post from the database by its ID."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    # This allows accessing columns by name
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT * FROM posts WHERE id = ?', (post_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except sqlite3.Error as e:
+        logging.error(f"Error fetching post {post_id} from database: {e}")
+        return None
+    finally:
+        conn.close()
+
 def is_post_seen(post_id):
     """检查帖子是否已存在于数据库中"""
     conn = sqlite3.connect(DATABASE_NAME)

@@ -42,8 +42,12 @@
                     {% endif %}
                     <a href="{{ post.web_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">查看原文</a>
                 </div>
-                <div class="card-footer">
-                    Post ID: {{ post.id }}
+                <div class="card-footer d-flex justify-content-between align-items-center">
+                    <span>Post ID: {{ post.id }}</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-secondary forward-btn" data-post-id="{{ post.id }}">转发</button>
+                        <button class="btn btn-sm btn-outline-danger delete-btn" data-post-id="{{ post.id }}">删除</button>
+                    </div>
                 </div>
             </div>
             {% endfor %}
@@ -119,6 +123,50 @@
                 },
                 error: function(xhr, status, error) {
                     var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "同步最新帖子失败。";
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
+                }
+            });
+        });
+
+        // Using event delegation for dynamically added buttons if needed, but direct binding is fine here.
+        $('.col-md-9').on('click', '.delete-btn', function() {
+            var $button = $(this);
+            var postId = $button.data('post-id');
+            if (confirm('您确定要从本地数据库中删除帖子 ' + postId + ' 吗？这将允许系统在下次同步时重新抓取它。')) {
+                $button.prop('disabled', true).text('删除中...');
+                $.ajax({
+                    url: '/delete_post/' + postId,
+                    type: 'POST',
+                    success: function(response) {
+                        // On success, remove the card from the view
+                        $button.closest('.post-card').fadeOut(500, function() { $(this).remove(); });
+                        displaySyncMessage('帖子 ' + postId + ' 已删除。', 'success');
+                    },
+                    error: function(xhr) {
+                        var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "删除失败。";
+                        displaySyncMessage(errorMsg, 'danger');
+                        $button.prop('disabled', false).text('删除');
+                    }
+                });
+            }
+        });
+
+        $('.col-md-9').on('click', '.forward-btn', function() {
+            var $button = $(this);
+            var postId = $button.data('post-id');
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('转发中...');
+            $.ajax({
+                url: '/forward_post/' + postId,
+                type: 'POST',
+                success: function(response) {
+                    displaySyncMessage(response.message, 'success');
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "转发失败。";
                     displaySyncMessage(errorMsg, 'danger');
                 },
                 complete: function() {
