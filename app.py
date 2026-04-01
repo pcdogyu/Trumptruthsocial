@@ -21,8 +21,10 @@ TEMPLATES_DIR = 'templates'
 # 全局变量，用于存储配置和监控状态
 # 注意：在多线程/多进程环境中，直接修改全局变量需要加锁
 # 这里为了简化，暂时不加锁，但实际生产环境需要考虑并发问题
+# 为了确保线程安全，我们引入锁来保护全局配置和同步状态。
 global_config = {}
 config_last_modified = 0
+config_lock = threading.Lock() # 用于保护 global_config 和 config_last_modified
 
 # --- 日志配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -41,18 +43,20 @@ def load_config_from_file(path=CONFIG_FILE):
 
 def get_current_config():
     """获取最新的配置，如果文件有更新则重新加载"""
-    global global_config, config_last_modified
-    try:
-        current_modified = os.path.getmtime(CONFIG_FILE)
-        if current_modified > config_last_modified:
-            logging.info("config.yaml 已更新，重新加载配置。")
-            global_config = load_config_from_file(CONFIG_FILE)
-            config_last_modified = current_modified
-    except FileNotFoundError:
-        logging.warning(f"config.yaml 未找到，使用空配置。")
-        global_config = {}
-    except Exception as e:
-        logging.error(f"检查或加载 config.yaml 时出错: {e}")
+    global global_config, config_last_modified, config_lock
+    with config_lock: # 保护对 global_config 和 config_last_modified 的访问
+        try:
+            current_modified = os.path.getmtime(CONFIG_FILE)
+            if current_modified > config_last_modified:
+                logging.info("config.yaml 已更新，重新加载配置。")
+                global_config = load_config_from_file(CONFIG_FILE)
+                config_last_modified = current_modified
+        except FileNotFoundError:
+            logging.warning(f"config.yaml 未找到，使用空配置。")
+            global_config = {}
+        except Exception as e:
+            logging.error(f"检查或加载 config.yaml 时出错: {e}")
+            global_config = {} # 确保在出错时 global_config 仍然是一个字典
     return global_config
 
 def mask_api_key(key):
@@ -66,8 +70,9 @@ def save_config(config_data, path=CONFIG_FILE):
     try:
         with open(path, 'w', encoding='utf-8') as f:
             yaml.safe_dump(config_data, f, default_flow_style=False, allow_unicode=True)
-        global config_last_modified
-        config_last_modified = os.path.getmtime(CONFIG_FILE) # 更新修改时间
+        global config_last_modified, config_lock
+        with config_lock: # 保护对 config_last_modified 的更新
+            config_last_modified = os.path.getmtime(CONFIG_FILE) # 更新修改时间
         logging.info(f"配置已保存到 '{path}'。")
         return True
     except Exception as e:
@@ -328,10 +333,16 @@ def create_templates_if_not_exists():
 # Flask Routes
 @app.route('/')
 def index():
-    config = get_current_config() # 获取当前配置
+    config = get_current_config()
     ai_api_key = config.get('ai_analysis', {}).get('api_key', '')
-    masked_ai_api_key = mask_api_key(ai_api_key) # 遮蔽 API Key
-    return render_template('index.html', config=config, masked_ai_api_key=masked_ai_api_key)
+    masked_ai_api_key = mask_api_key(ai_api_key)
+    
+    bearer_token = config.get('auth', {}).get('bearer_token', '')
+    masked_bearer_token = mask_api_key(bearer_token)
+    telegram_bot_token = config.get('telegram', {}).get('bot_token', '')
+    masked_bot_token = mask_api_key(telegram_bot_token)
+    return render_template('index.html', config=config, masked_ai_api_key=masked_ai_api_key,
+                           masked_bearer_token=masked_bearer_token, masked_bot_token=masked_bot_token)
 
 @app.route('/save_config', methods=['POST'])
 def save_config_route():
@@ -358,12 +369,23 @@ def save_config_route():
     # 更新 auth
     if 'auth' not in new_config:
         new_config['auth'] = {}
-    new_config['auth']['bearer_token'] = request.form.get('bearer_token', '').strip()
+    submitted_bearer_token = request.form.get('bearer_token', '').strip()
+    if '*' not in submitted_bearer_token: # 如果提交的 Token 不包含星号，说明用户修改了
+        new_config['auth']['bearer_token'] = submitted_bearer_token
+    elif not submitted_bearer_token: # 如果用户提交的是空字符串
+        new_config['auth']['bearer_token'] = ''
+    # 否则，保持原有的 Token 不变 (因为显示的是遮蔽后的)
 
     # 更新 telegram
     if 'telegram' not in new_config:
         new_config['telegram'] = {}
-    new_config['telegram']['bot_token'] = request.form.get('bot_token', '').strip()
+    submitted_bot_token = request.form.get('bot_token', '').strip()
+    if '*' not in submitted_bot_token: # 如果提交的 Token 不包含星号，说明用户修改了
+        new_config['telegram']['bot_token'] = submitted_bot_token
+    elif not submitted_bot_token: # 如果用户提交的是空字符串
+        new_config['telegram']['bot_token'] = ''
+    # 否则，保持原有的 Token 不变
+    
     new_config['telegram']['chat_id'] = request.form.get('chat_id', '').strip()
 
     # 更新 refresh_interval
@@ -391,8 +413,10 @@ def content():
     return render_template('content.html', posts=posts, usernames=usernames, selected_username=selected_username)
 
 # 全局变量，用于控制同步线程
+# 同样需要锁来保护 sync_in_progress
 sync_thread = None
 sync_in_progress = False
+sync_lock = threading.Lock() # 用于保护 sync_in_progress
 
 def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7):
     """
@@ -400,10 +424,11 @@ def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7
     注意：这个函数需要一个 TruthSocialMonitor 实例，并且能够获取到配置。
     为了避免循环导入，这里假设 monitor_instance 已经传入。
     """
-    global sync_in_progress
+    global sync_in_progress, sync_lock
     with app_context: # 确保在 Flask 应用上下文中运行
         logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
-        sync_in_progress = True
+        with sync_lock: # 保护对 sync_in_progress 的设置
+            sync_in_progress = True
         try:
             # 这是一个简化的同步逻辑。
             # 使用 fetch_historical_posts_selenium 来获取指定天数内的历史帖子。
@@ -427,13 +452,15 @@ def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7
             logging.error(f"同步内容时发生错误: {e}")
             flash(f'内容同步失败: {e}', 'danger')
         finally:
-            sync_in_progress = False
+            with sync_lock: # 保护对 sync_in_progress 的重置
+                sync_in_progress = False
 
 @app.route('/sync_content', methods=['POST'])
 def sync_content():
-    global sync_thread, sync_in_progress
-    if sync_in_progress:
-        return jsonify({'status': 'info', 'message': '同步操作正在进行中，请稍候。'}), 202
+    global sync_thread, sync_in_progress, sync_lock
+    with sync_lock: # 保护对 sync_in_progress 的检查和后续操作
+        if sync_in_progress:
+            return jsonify({'status': 'info', 'message': '同步操作正在进行中，请稍候。'}), 202
 
     config = get_current_config()
     accounts_to_monitor = config.get('accounts_to_monitor', [])

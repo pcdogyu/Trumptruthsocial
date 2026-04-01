@@ -11,6 +11,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **Multi-Account Monitoring**: Monitors multiple Truth Social accounts simultaneously.
 *   **Telegram Notifications**: Sends notifications to Telegram for new text and video posts.
 *   **Web UI**: A Flask-based web interface for managing monitored accounts, API keys, and other settings.
+*   **Configurable Web Selectors**: CSS selectors used for scraping can now be configured in `config.yaml`, making the tool more resilient to website structure changes.
 *   **Authenticated Fetching**: Uses a Bearer Token to access content that may require authentication.
 *   **Token Helper**: Includes a script (`get_token.py`) to easily extract the Bearer Token from your browser after logging in.
 *   **Content Viewer**: A dedicated Web UI page to browse historical posts from monitored accounts.
@@ -73,6 +74,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **多账户监控**: 支持同时监控多个 Truth Social 账户。
 *   **Telegram 通知**: 当发现新帖子（文本或视频）时，发送通知到 Telegram。
 *   **Web UI**: 提供一个基于 Flask 的 Web 界面，用于管理监控列表、API 密钥和其他设置。
+*   **可配置的网页选择器**: 用于网页抓取的 CSS 选择器现在可以在 `config.yaml` 中配置，使工具更能适应网站结构的变化。
 *   **认证抓取**: 使用 Bearer Token 获取需要登录才能查看的内容。
 *   **Token 获取助手**: 包含一个辅助脚本 (`get_token.py`)，可以在您登录后轻松从浏览器中提取 Bearer Token。
 *   **内容查看器**: 一个专门的 Web UI 页面，用于浏览监控账户的历史帖子。

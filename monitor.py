@@ -39,6 +39,18 @@ class TruthSocialMonitor:
         self.session.headers.update(self.headers)
         logging.info("Monitor initialized with config.")
 
+        # Load selectors from config, with fallbacks
+        self.selectors = self.config.get('selectors', {})
+        self.post_container_selector = self.selectors.get('post_container', 'article[data-id]')
+        self.post_id_attribute = self.selectors.get('post_id_attribute', 'data-id')
+        self.post_content_div_selector = self.selectors.get('post_content_div', 'div.status__content')
+        self.post_web_url_anchor_selector = self.selectors.get('post_web_url_anchor', 'a.status__relative-time')
+        self.video_container_div_selector = self.selectors.get('video_container_div', 'div.media-gallery__item-video-container')
+        self.video_tag_selector = self.selectors.get('video_tag', 'video')
+        self.video_source_tag_selector = self.selectors.get('video_source_tag', 'source')
+        self.post_timestamp_tag_selector = self.selectors.get('post_timestamp_tag', 'time')
+        self.post_timestamp_attribute = self.selectors.get('post_timestamp_attribute', 'datetime')
+
     def _init_selenium_driver(self):
         """初始化并返回一个 Selenium WebDriver 实例"""
         options = Options()
@@ -67,10 +79,10 @@ class TruthSocialMonitor:
         从帖子元素中解析时间戳。
         假设时间戳在 <time> 标签的 datetime 属性中，例如: <time datetime="2023-10-27T10:00:00Z">
         """
-        time_element = post_element.find('time')
-        if time_element and 'datetime' in time_element.attrs:
+        time_element = post_element.find(self.post_timestamp_tag_selector)
+        if time_element and self.post_timestamp_attribute in time_element.attrs:
             try:
-                timestamp_str = time_element['datetime']
+                timestamp_str = time_element[self.post_timestamp_attribute]
                 # Python 3.11+ 可以直接解析 'Z'。为了兼容性，如果存在则替换 'Z'
                 if timestamp_str.endswith('Z'):
                     timestamp_str = timestamp_str[:-1] + '+00:00'
@@ -81,7 +93,7 @@ class TruthSocialMonitor:
                     dt_object = dt_object.replace(tzinfo=timezone.utc)
                 return dt_object
             except ValueError:
-                logging.warning(f"无法解析时间戳: {time_element['datetime']}. 将返回当前 UTC 时间作为备用。")
+                logging.warning(f"无法解析时间戳: {time_element[self.post_timestamp_attribute]}. 将返回当前 UTC 时间作为备用。")
         # 如果没有找到时间元素或解析失败，返回当前 UTC 时间。
         # 这确保了没有明确时间戳的帖子被视为最新，不会过早停止滚动。
         return datetime.now(timezone.utc)
@@ -100,31 +112,27 @@ class TruthSocialMonitor:
             soup = BeautifulSoup(response.text, 'html.parser')
             posts = []
 
-            # 以下 CSS 选择器是基于常见社交媒体网站结构的猜测。
-            # 您需要根据 Truth Social 网页的实际 HTML 结构进行调整。
-            # 使用浏览器开发者工具检查帖子元素的 class 或 id。
-            post_elements = soup.find_all('article', attrs={'data-id': True}) # 示例选择器，寻找带有 data-id 属性的 article 标签
+            # Use configurable CSS selectors
+            post_elements = soup.find_all(self.post_container_selector)
 
             for element in post_elements:
-                post_id = element.get('data-id') # 假设帖子ID在 data-id 属性中
+                post_id = element.get(self.post_id_attribute)
                 if not post_id:
                     continue # 如果没有 ID 则跳过
 
-                content_element = element.find('div', class_='status__content') # 假设内容在特定 class 的 div 中
+                content_element = element.find(self.post_content_div_selector)
                 content = content_element.get_text(strip=True) if content_element else ''
                 
-                web_url_element = element.find('a', class_='status__relative-time') # 假设链接在特定 class 的 <a> 标签中
+                web_url_element = element.find(self.post_web_url_anchor_selector)
                 web_url = web_url_element['href'] if web_url_element and 'href' in web_url_element.attrs else profile_url
 
                 # --- 新增：检查视频 ---
                 video_url = None
-                # 示例：寻找视频容器。您需要根据实际网页结构调整 class 名称
-                video_container = element.find('div', class_='media-gallery__item-video-container') 
+                video_container = element.find(self.video_container_div_selector) 
                 if video_container:
-                    video_tag = video_container.find('video')
+                    video_tag = video_container.find(self.video_tag_selector)
                     if video_tag:
-                        # 优先从 <source> 标签获取 URL
-                        source_tag = video_tag.find('source')
+                        source_tag = video_tag.find(self.video_source_tag_selector)
                         if source_tag and source_tag.get('src'):
                             video_url = source_tag['src']
                         # 否则直接从 <video> 标签获取
@@ -165,14 +173,22 @@ class TruthSocialMonitor:
         target_datetime = datetime.now(timezone.utc) - timedelta(days=days_to_sync)
 
         for i in range(max_scrolls):
-            if stop_fetching or len(collected_posts) >= max_posts_per_user:
-                logging.info(f"停止抓取 @{username} 的历史帖子。原因：{'达到目标日期' if stop_fetching else '达到最大帖子数限制'}。")
+            if stop_fetching:
+                logging.info(f"停止抓取 @{username} 的历史帖子。原因：达到目标日期。")
+                break
+            if len(collected_posts) >= max_posts_per_user:
+                logging.info(f"停止抓取 @{username} 的历史帖子。原因：达到最大帖子数限制 ({max_posts_per_user} 条)。")
                 break
 
             logging.debug(f"Scrolling down for @{username}, scroll attempt {i+1}/{max_scrolls}...")
+            last_height = driver.execute_script("return document.body.scrollHeight")
             # 滚动到页面底部
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2) # 等待新内容加载
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                logging.info(f"滚动后 @{username} 的页面高度未变化，可能已到达内容末尾。")
+                break
 
             # 解析当前页面源
             soup = BeautifulSoup(driver.page_source, 'html.parser')

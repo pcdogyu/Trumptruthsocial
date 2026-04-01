@@ -23,3 +23,26 @@ ai_analysis:
 
 # 刷新间隔 (例如 "5m" 代表 5 分钟, "1h" 代表 1 小时)
 refresh_interval: "5m"
+
+# Web Scraping Selectors (for BeautifulSoup and Selenium)
+# These selectors are used to locate elements on the Truth Social website.
+# If the website structure changes, you may need to update these values.
+selectors:
+  # Selector for a single post article/container element
+  post_container: 'article[data-id]'
+  # Attribute name that holds the post ID within the post_container
+  post_id_attribute: 'data-id'
+  # Selector for the div containing the main text content of a post
+  post_content_div: 'div.status__content'
+  # Selector for the anchor tag that links to the original post (often contains timestamp)
+  post_web_url_anchor: 'a.status__relative-time'
+  # Selector for the container div of a video
+  video_container_div: 'div.media-gallery__item-video-container'
+  # Selector for the video tag itself within the video_container
+  video_tag: 'video'
+  # Selector for the source tag within a video tag (for video URL)
+  video_source_tag: 'source'
+  # Selector for the time tag that holds the post timestamp
+  post_timestamp_tag: 'time'
+  # Attribute name that holds the datetime value within the post_timestamp_tag
+  post_timestamp_attribute: 'datetime'
