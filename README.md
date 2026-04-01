@@ -18,6 +18,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **Content Viewer**: A dedicated Web UI page to browse historical posts from monitored accounts.
 *   **Historical Sync**: A button in the Web UI to trigger a manual synchronization of recent (e.g., last 7 days) posts for all monitored accounts, using a more robust Selenium-based scraping method to fetch dynamically loaded content.
 *   **Post History**: Stores a history of all fetched posts in a local SQLite database.
+*   **Sync Latest Post**: A button in the Web UI to trigger a manual synchronization of the very latest post for all monitored accounts, using a faster requests-based method.
 *   **History Viewer**: The Web UI includes a page to view post history, including embedded videos.
 
 ### Prerequisites
@@ -45,6 +46,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **Fill `config.yaml`** (or use the Web UI later):
         *   `auth`: Paste the `bearer_token` you obtained.
         *   `telegram`: Telegram `bot_token` and `chat_id` are now configured via the "消息推送" (Message Push) page in the Web UI.
+        *   `auth.truthsocial_username`: Your username on Truth Social (e.g., `pcdogyuhao`).
         *   `ai_analysis`: AI settings are now configured via the "AI 配置" (AI Config) page in the Web UI.
         *   You can leave `accounts_to_monitor` empty and add them via the Web UI.
 
@@ -65,6 +67,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **Message Push Page**: Navigate to the "消息推送" (Message Push) tab to configure Telegram settings.
     *   **Content Page**: Navigate to the "内容" (Content) tab to view historical posts.
     *   **Sync Button**: On the "内容" page, click "同步最近7天内容" to fetch more historical data.
+    *   **Sync Latest Button**: On the "内容" page, click "同步最近一条" to fetch the very latest post for all monitored accounts.
 ---
 
 ## 中文说明
@@ -85,6 +88,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **内容查看器**: 一个专门的 Web UI 页面，用于浏览监控账户的历史帖子。
 *   **历史同步**: Web UI 中增加一个按钮，可以手动触发所有监控账户最近（例如，最近7天）帖子的同步。此功能现在使用更健壮的基于 Selenium 的抓取方法，能够获取动态加载的历史内容。
 *   **历史记录**: 将所有抓取到的帖子历史记录保存在本地 SQLite 数据库中。
+*   **同步最近一条**: Web UI 中增加一个按钮，可以手动触发所有监控账户的最新一条帖子的同步，使用更快的基于 requests 的方法。
 *   **历史查看器**: Web UI 包含历史记录页面，可查看帖子内容和播放视频。
 
 ### 环境要求
@@ -112,6 +116,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **填写 `config.yaml`** (或稍后通过 Web UI 配置):
         *   `auth`: 粘贴你获取到的 `bearer_token`。
         *   `telegram`: Telegram 的 `bot_token` 和 `chat_id` 现在通过 Web UI 中的“消息推送”页面进行配置。
+        *   `auth.truthsocial_username`: 您在 Truth Social 上的用户名（例如 `pcdogyuhao`）。
         *   `ai_analysis`: AI 设置现在通过 Web UI 中的“AI 配置”页面进行配置。
         *   `accounts_to_monitor` 列表可以先留空，稍后通过 Web UI 添加。
 
@@ -131,4 +136,5 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **AI 配置页面**: 导航到“AI 配置”选项卡以配置 AI 设置。
     *   **消息推送页面**: 导航到“消息推送”选项卡以配置 Telegram 设置。
     *   **内容页面**: 导航到“内容”选项卡以查看历史帖子。
-    *   **同步按钮**: 在“内容”页面上，点击“同步最近7天内容”以获取更多历史数据。
+    *   **同步最近7天内容按钮**: 在“内容”页面上，点击“同步最近7天内容”以获取更多历史数据。
+    *   **同步最近一条按钮**: 在“内容”页面上，点击“同步最近一条”以获取所有监控账户的最新一条帖子。

@@ -13,6 +13,11 @@
         <small class="form-text text-muted">从 `get_token.py` 获取的认证令牌。</small>
     </div>
     <div class="form-group">
+        <label for="truthsocial_username">Truth Social 用户名:</label>
+        <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{ config.auth.truthsocial_username if config.auth else '' }}">
+        <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。</small>
+    </div>
+    <div class="form-group">
         <label for="refresh_interval">刷新间隔:</label>
         <input type="text" class="form-control" id="refresh_interval" name="refresh_interval" value="{{ config.refresh_interval if config.refresh_interval else '5m' }}">
         <small class="form-text text-muted">例如: 5m (5分钟), 1h (1小时)。</small>

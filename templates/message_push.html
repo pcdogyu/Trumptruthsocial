@@ -41,6 +41,7 @@
                     chat_id: $('#chat_id').val()
                 }),
                 success: function(response) {
+                    var $result = $('#testMessageResult');
                     $result.text(response.message).removeClass('text-danger').addClass('text-success');
                     setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
                 },
@@ -52,7 +53,8 @@
                     } catch (e) {
                         errorMessage += ': ' + xhr.responseText;
                     }
-                    vssage).removeClass('text-success').addClass('text-danger');
+                    var $result = $('#testMessageResult');
+                    $result.text(errorMessage).removeClass('text-success').addClass('text-danger');
                     setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
                 },
                 complete: function() {

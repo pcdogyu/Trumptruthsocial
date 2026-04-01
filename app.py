@@ -185,6 +185,9 @@ def create_templates_if_not_exists():
                 <li class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
                     <a class="nav-link" href="{{ url_for('index') }}">配置</a>
                 </li>
+                <li class="nav-item {% if request.endpoint == 'ai_config' %}active{% endif %}">
+                    <a class="nav-link" href="{{ url_for('ai_config') }}">AI 配置</a>
+                </li>
                 <li class="nav-item {% if request.endpoint == 'content' %}active{% endif %}">
                     <a class="nav-link" href="{{ url_for('content') }}">内容</a>
                 </li>
@@ -210,7 +213,7 @@ def create_templates_if_not_exists():
 
     <footer class="footer">
         <div class="container">
-            <span class="text-muted">© 2023 TruthSocial Monitor</span>
+            <span class="text-muted">Code by Yuhao@jiansutech.com - {{ git_commit_info.time }} - {{ git_commit_info.hash }} - {{ git_commit_info.branch }}</span>
         </div>
     </footer>
 
@@ -236,24 +239,17 @@ def create_templates_if_not_exists():
 <h1 class="mt-5">配置</h1>
 
 <form method="POST" action="{{ url_for('save_config_route') }}">
+    <!-- Truth Social 认证设置 -->
     <div class="form-group">
         <label for="bearer_token">Bearer Token:</label>
-        <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{ config.auth.bearer_token if config.auth else '' }}">
+        <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{ masked_bearer_token }}">
         <small class="form-text text-muted">从 `get_token.py` 获取的认证令牌。</small>
     </div>
-
     <div class="form-group">
-        <label for="bot_token">Telegram Bot Token:</label>
-        <input type="text" class="form-control" id="bot_token" name="bot_token" value="{{ config.telegram.bot_token if config.telegram else '' }}">
-        <small class="form-text text-muted">从 BotFather 获取的 Telegram 机器人令牌。</small>
+        <label for="truthsocial_username">Truth Social 用户名:</label>
+        <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{ config.auth.truthsocial_username if config.auth else '' }}">
+        <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。</small>
     </div>
-
-    <div class="form-group">
-        <label for="chat_id">Telegram Chat ID:</label>
-        <input type="text" class="form-control" id="chat_id" name="chat_id" value="{{ config.telegram.chat_id if config.telegram else '' }}">
-        <small class="form-text text-muted">接收通知的 Telegram 聊天 ID。</small>
-    </div>
-
     <div class="form-group">
         <label for="refresh_interval">刷新间隔:</label>
         <input type="text" class="form-control" id="refresh_interval" name="refresh_interval" value="{{ config.refresh_interval if config.refresh_interval else '5m' }}">
@@ -284,8 +280,9 @@ def create_templates_if_not_exists():
 <h1 class="mt-5">历史内容</h1>
 
 <div class="mb-3">
-    <button id="syncButton" class="btn btn-info">同步最近7天内容</button>
-    <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近7天的帖子。</small>
+    <button id="syncHistoricalButton" class="btn btn-info">同步最近7天内容</button>
+    <button id="syncLatestButton" class="btn btn-primary ml-2">同步最近一条</button>
+    <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近的帖子。</small>
 </div>
 
 <div class="row">
@@ -332,7 +329,7 @@ def create_templates_if_not_exists():
 {% block scripts %}
 <script>
     $(document).ready(function() {
-        $('#syncButton').on('click', function() {
+        $('#syncHistoricalButton').on('click', function() {
             $(this).prop('disabled', true).text('同步中...');
             $.ajax({
                 url: '{{ url_for("sync_content") }}',
@@ -347,6 +344,25 @@ def create_templates_if_not_exists():
                 error: function(xhr, status, error) {
                     alert('同步失败: ' + xhr.responseText);
                     $('#syncButton').prop('disabled', false).text('同步最近7天内容');
+                }
+            });
+        });
+
+        $('#syncLatestButton').on('click', function() {
+            $(this).prop('disabled', true).text('同步中...');
+            $.ajax({
+                url: '{{ url_for("sync_latest_post") }}',
+                type: 'POST',
+                success: function(response) {
+                    alert(response.message);
+                    $('#syncLatestButton').prop('disabled', false).text('同步最近一条');
+                    if (response.status === 'success') {
+                        location.reload(); // 同步成功后刷新页面
+                    }
+                },
+                error: function(xhr, status, error) {
+                    alert('同步失败: ' + xhr.responseText);
+                    $('#syncLatestButton').prop('disabled', false).text('同步最近一条');
                 }
             });
         });
@@ -381,9 +397,8 @@ def create_templates_if_not_exists():
         <small class="form-text text-muted">接收通知的 Telegram 聊天 ID。</small>
     </div>
 
-    <button type="submit" class="btn btn-primary">保存配置</button>
+    <button type="submit" class="btn btn-primary">保存推送配置</button>
     <button type="button" class="btn btn-secondary ml-2" id="testMessageButton">消息测试</button>
-    <span id="testMessageResult" class="ml-2 align-middle"></span>
 </form>
 {% endblock %}
 
@@ -404,9 +419,7 @@ def create_templates_if_not_exists():
                     chat_id: $('#chat_id').val()
                 }),
                 success: function(response) {
-                    var $result = $('#testMessageResult');
-                    $result.text(response.message).removeClass('text-danger').addClass('text-success');
-                    setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
+                    alert(response.message);
                 },
                 error: function(xhr, status, error) {
                     var errorMessage = '测试失败';
@@ -416,9 +429,7 @@ def create_templates_if_not_exists():
                     } catch (e) {
                         errorMessage += ': ' + xhr.responseText;
                     }
-                    var $result = $('#testMessageResult');
-                    $result.text(errorMessage).removeClass('text-success').addClass('text-danger');
-                    setTimeout(function() { $result.text(''); }, 5000); // 5秒后清除消息
+                    alert(errorMessage);
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
@@ -449,35 +460,24 @@ def index():
 def save_config_route():
     new_config = get_current_config() # 获取当前配置作为基础
     
-    # 更新 AI 分析设置
-    if 'ai_analysis' not in new_config:
-        new_config['ai_analysis'] = {}
-    
-    # Checkbox 的值在 request.form 中存在即为选中
-    new_config['ai_analysis']['enabled'] = 'ai_enabled' in request.form 
-    
-    submitted_ai_api_key = request.form.get('ai_api_key', '').strip()
-    # 如果提交的 API Key 包含星号，说明用户没有修改，保留旧值
-    # 否则，更新为新提交的值
-    if '*' not in submitted_ai_api_key:
-        new_config['ai_analysis']['api_key'] = submitted_ai_api_key
-    # 如果用户提交的是空字符串，也应该更新为空
-    elif not submitted_ai_api_key:
-        new_config['ai_analysis']['api_key'] = ''
-
-    new_config['ai_analysis']['prompt'] = request.form.get('ai_prompt', '').strip()
-
     # 更新 auth
     if 'auth' not in new_config:
         new_config['auth'] = {}
+    
+    # 更新 truthsocial_username
+    new_config['auth']['truthsocial_username'] = request.form.get('truthsocial_username', '').strip()
+
+    # 更新 bearer_token
     submitted_bearer_token = request.form.get('bearer_token', '').strip()
-    if '*' not in submitted_bot_token: # 如果提交的 Token 不包含星号，说明用户修改了
-        new_config['telegram']['bot_token'] = submitted_bot_token
-    elif not submitted_bot_token: # 如果用户提交的是空字符串
-        new_config['telegram']['bot_token'] = ''
+    if '*' not in submitted_bearer_token: # 如果提交的 Token 不包含星号，说明用户修改了
+        new_config['auth']['bearer_token'] = submitted_bearer_token
+    elif not submitted_bearer_token: # 如果用户提交的是空字符串
+        new_config['auth']['bearer_token'] = ''
     # 否则，保持原有的 Token 不变
     
-    new_config['telegram']['chat_id'] = request.form.get('chat_id', '').strip()
+    # 移除 Telegram 相关配置，因为它们已移至 /message_push 页面
+    # 移除 AI 相关配置，因为它们已移至 /ai_config 页面
+    # new_config['telegram']['chat_id'] = request.form.get('chat_id', '').strip() # 这行也应该移除
 
     # 更新 refresh_interval
     new_config['refresh_interval'] = request.form.get('refresh_interval', '5m').strip()
@@ -624,34 +624,36 @@ def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7
     为了避免循环导入，这里假设 monitor_instance 已经传入。
     """
     global sync_in_progress, sync_lock
-    with app_context: # 确保在 Flask 应用上下文中运行
-        logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
-        with sync_lock: # 保护对 sync_in_progress 的设置
-            sync_in_progress = True
+    with app.app_context(): # 直接使用 app.app_context()
         try:
-            # 这是一个简化的同步逻辑。
-            # 使用 fetch_historical_posts_selenium 来获取指定天数内的历史帖子。
-            logging.info(f"使用 Selenium 抓取 @{username} 最近 {days_to_sync} 天的历史帖子。")
-
+            logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
+            with sync_lock:
+                sync_in_progress = True
+            
+            sync_successful = True
             for username in accounts_to_sync:
-                logging.info(f"正在同步用户 @{username} 的内容...")
-                # 假设 fetch_latest_posts 能够获取到足够多的帖子，
-                # 并且数据库的 is_post_seen 会处理重复。
-                # 理想情况下，这里应该有一个专门用于历史抓取的方法，
-                # 能够处理分页或日期范围。
-                posts = monitor_instance.fetch_historical_posts_selenium(username, days_to_sync)
-                for post in posts:
-                    if database.add_post(post): # add_post 会自动检查是否已存在
-                        logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
-                time.sleep(1) # 避免请求过快
+                logging.info(f"正在使用 Selenium 抓取 @{username} 最近 {days_to_sync} 天的历史帖子。")
+                try:
+                    posts = monitor_instance.fetch_historical_posts_selenium(username, days_to_sync)
+                    for post in posts:
+                        if database.add_post(post):
+                            logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
+                    time.sleep(1)
+                except Exception as e:
+                    logging.error(f"同步用户 @{username} 的历史内容时出错: {e}")
+                    sync_successful = False
+            
+            if sync_successful:
+                logging.info(f"最近 {days_to_sync} 天内容同步完成。")
+                flash('内容同步成功！', 'success')
+            else:
+                flash('部分内容同步失败，请查看日志获取详情。', 'warning')
 
-            logging.info(f"最近 {days_to_sync} 天内容同步完成。")
-            flash('内容同步成功！', 'success')
         except Exception as e:
-            logging.error(f"同步内容时发生错误: {e}")
+            logging.error(f"同步历史内容时发生全局错误: {e}")
             flash(f'内容同步失败: {e}', 'danger')
         finally:
-            with sync_lock: # 保护对 sync_in_progress 的重置
+            with sync_lock:
                 sync_in_progress = False
 
 @app.route('/sync_content', methods=['POST'])
@@ -677,9 +679,82 @@ def sync_content():
         return jsonify({'status': 'error', 'message': f'无法初始化监控器: {e}'}), 500
 
     # 在新线程中启动同步任务
-    app_context = app.app_context()
-    sync_thread = threading.Thread(target=_sync_worker, args=(app_context, monitor_instance, accounts_to_monitor, 7))
+    # 不再传递 app_context，线程函数内部会自行获取
+    sync_thread = threading.Thread(target=_sync_worker, args=(monitor_instance, accounts_to_monitor, 7))
     sync_thread.daemon = True # 设置为守护线程，主程序退出时自动终止
     sync_thread.start()
 
     return jsonify({'status': 'success', 'message': '同步任务已在后台启动。请稍后刷新页面查看结果。'}), 200
+
+# 全局变量，用于控制“同步最近一条”线程
+sync_latest_thread = None
+sync_latest_in_progress = False
+sync_latest_lock = threading.Lock() # 用于保护 sync_latest_in_progress
+
+def _sync_latest_worker(app_context, monitor_instance, accounts_to_sync):
+    """
+    后台同步最近一条帖子工作函数。
+    """
+    global sync_latest_in_progress, sync_latest_lock
+    with app.app_context(): # 直接使用 app.app_context()
+        try:
+            logging.info("开始同步所有监控账户的最近一条帖子...")
+            with sync_latest_lock:
+                sync_latest_in_progress = True
+            
+            sync_successful = True
+            for username in accounts_to_sync:
+                logging.info(f"正在同步用户 @{username} 的最近一条帖子...")
+                try:
+                    # 调用 fetch_latest_posts，它使用 requests 快速获取最新帖子
+                    posts = monitor_instance.fetch_latest_posts(username)
+                    if posts:
+                        # 遍历所有获取到的帖子，并添加到数据库（add_post会处理去重）
+                        for post in posts:
+                            if database.add_post(post):
+                                logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
+                        time.sleep(0.5) # 短暂延时
+                    else:
+                        logging.info(f"未获取到用户 @{username} 的最新帖子。")
+                except Exception as e:
+                    logging.error(f"同步用户 @{username} 的最近一条帖子时发生错误: {e}")
+                    sync_successful = False
+            
+            if sync_successful:
+                logging.info("所有监控账户的最近一条帖子同步完成。")
+                flash('最近一条帖子同步成功！', 'success')
+            else:
+                flash('部分最近一条帖子同步失败，请查看日志获取详情。', 'warning')
+
+        except Exception as e:
+            logging.error(f"同步最近一条帖子时发生全局错误: {e}")
+            flash(f'同步最近一条帖子失败: {e}', 'danger')
+        finally:
+            with sync_latest_lock:
+                sync_latest_in_progress = False
+
+@app.route('/sync_latest_post', methods=['POST'])
+def sync_latest_post():
+    global sync_latest_thread, sync_latest_in_progress, sync_latest_lock
+    with sync_latest_lock:
+        if sync_latest_in_progress:
+            return jsonify({'status': 'info', 'message': '同步最近一条帖子操作正在进行中，请稍候。'}), 202
+
+    config = get_current_config()
+    accounts_to_monitor = config.get('accounts_to_monitor', [])
+    if not accounts_to_monitor:
+        return jsonify({'status': 'error', 'message': '没有配置要监控的账户，无法同步最近一条帖子。'}), 400
+
+    try:
+        from monitor import TruthSocialMonitor
+        monitor_instance = TruthSocialMonitor(config)
+    except Exception as e:
+        logging.error(f"无法创建 TruthSocialMonitor 实例: {e}")
+        return jsonify({'status': 'error', 'message': f'无法初始化监控器: {e}'}), 500
+
+    app_context = app.app_context()
+    sync_latest_thread = threading.Thread(target=_sync_latest_worker, args=(monitor_instance, accounts_to_monitor)) # 不再传递 app_context
+    sync_latest_thread.daemon = True
+    sync_latest_thread.start()
+
+    return jsonify({'status': 'success', 'message': '同步最近一条帖子任务已在后台启动。请稍后刷新页面查看结果。'}), 200
