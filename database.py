@@ -1,76 +1,100 @@
 import sqlite3
 import logging
-import os
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 
-DATABASE_FILE = 'monitor.db'
+DATABASE_NAME = 'monitor.db'
 
-def get_db_connection():
-    """创建并返回一个数据库连接"""
-    conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row # 允许通过列名访问数据
-    return conn
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def init_db():
-    """初始化数据库，创建表（如果不存在）"""
-    if os.path.exists(DATABASE_FILE):
-        return
-        
-    logging.info("正在创建新的 SQLite 数据库...")
-    conn = get_db_connection()
-    try:
-        with conn:
-            conn.execute('''
-                CREATE TABLE posts (
-                    id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    content TEXT,
-                    web_url TEXT,
-                    video_url TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-        logging.info("数据库表 'posts' 创建成功。")
-    except sqlite3.Error as e:
-        logging.error(f"数据库初始化失败: {e}")
-    finally:
-        conn.close()
+    """初始化数据库，创建 posts 表"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS posts (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            content TEXT,
+            web_url TEXT,
+            video_url TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            raw_data TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logging.info("数据库初始化完成。")
 
-def add_post(post):
-    """
-    将一个新帖子添加到数据库。
-    如果帖子已存在，则不执行任何操作。
-    """
-    conn = get_db_connection()
+def add_post(post_data):
+    """向数据库添加一个帖子"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
     try:
-        with conn:
-            conn.execute(
-                "INSERT INTO posts (id, username, content, web_url, video_url) VALUES (?, ?, ?, ?, ?)",
-                (post['id'], post['username'], post.get('content'), post.get('web_url'), post.get('video_url'))
-            )
-    except sqlite3.IntegrityError:
-        # 主键冲突，意味着帖子已存在，这在我们的逻辑中是正常的，无需记录错误
-        pass
+        cursor.execute('''
+            INSERT OR IGNORE INTO posts (id, username, content, web_url, video_url, raw_data)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            post_data.get('id'),
+            post_data.get('username'),
+            post_data.get('content'),
+            post_data.get('web_url'),
+            post_data.get('video_url'),
+            json.dumps(post_data) # 存储原始数据以备将来使用
+        ))
+        conn.commit()
+        if cursor.rowcount > 0:
+            logging.info(f"帖子 {post_data.get('id')} 已添加到数据库。")
+            return True
+        else:
+            logging.debug(f"帖子 {post_data.get('id')} 已存在，跳过。")
+            return False
     except sqlite3.Error as e:
         logging.error(f"添加帖子到数据库时出错: {e}")
+        return False
     finally:
         conn.close()
 
 def is_post_seen(post_id):
-    """检查指定的 post_id 是否已存在于数据库中"""
-    conn = get_db_connection()
+    """检查帖子是否已存在于数据库中"""
+    conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,))
-    result = cursor.fetchone() is not None
+    cursor.execute('SELECT 1 FROM posts WHERE id = ?', (post_id,))
+    result = cursor.fetchone()
     conn.close()
-    return result
+    return result is not None
 
-def get_recent_posts(limit=100):
-    """从数据库获取最近的帖子记录"""
-    conn = get_db_connection()
+def get_all_posts(username=None, limit=100, offset=0):
+    """从数据库获取所有帖子，可按用户名过滤"""
+    conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM posts ORDER BY created_at DESC LIMIT ?", (limit,))
-    # 将 sqlite3.Row 对象转换为字典列表
-    posts = [dict(row) for row in cursor.fetchall()]
+    query = 'SELECT id, username, content, web_url, video_url, timestamp FROM posts'
+    params = []
+    if username:
+        query += ' WHERE username = ?'
+        params.append(username)
+    query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
+    params.extend([limit, offset])
+    
+    cursor.execute(query, params)
+    posts = []
+    for row in cursor.fetchall():
+        posts.append({
+            'id': row[0],
+            'username': row[1],
+            'content': row[2],
+            'web_url': row[3],
+            'video_url': row[4],
+            'timestamp': row[5]
+        })
     conn.close()
     return posts
+
+def get_unique_usernames():
+    """获取数据库中所有唯一的用户名"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT DISTINCT username FROM posts ORDER BY username ASC')
+    usernames = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return usernames

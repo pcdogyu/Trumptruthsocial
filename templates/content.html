@@ -1,0 +1,77 @@
+{% extends "layout.html" %}
+
+{% block title %}历史内容{% endblock %}
+
+{% block content %}
+<h1 class="mt-5">历史内容</h1>
+
+<div class="mb-3">
+    <button id="syncButton" class="btn btn-info">同步最近7天内容</button>
+    <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近7天的帖子。</small>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="list-group">
+            <a href="{{ url_for('content') }}" class="list-group-item list-group-item-action {% if not selected_username %}active{% endif %}">所有账户</a>
+            {% for user in usernames %}
+            <a href="{{ url_for('content', username=user) }}" class="list-group-item list-group-item-action {% if selected_username == user %}active{% endif %}">{{ user }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="col-md-9">
+        {% if posts %}
+            {% for post in posts %}
+            <div class="card post-card">
+                <div class="card-header">
+                    <a href="https://truthsocial.com/@{{ post.username }}" target="_blank">@{{ post.username }}</a>
+                    <span class="float-right text-muted">{{ post.timestamp }}</span>
+                </div>
+                <div class="card-body">
+                    <p class="card-text">{{ post.content }}</p>
+                    {% if post.video_url %}
+                        <div class="video-container">
+                            <video controls preload="metadata" style="width: 100%; height: auto;">
+                                <source src="{{ post.video_url }}" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                        </div>
+                    {% endif %}
+                    <a href="{{ post.web_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">查看原文</a>
+                </div>
+                <div class="card-footer">
+                    Post ID: {{ post.id }}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>没有找到历史帖子。</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        $('#syncButton').on('click', function() {
+            $(this).prop('disabled', true).text('同步中...');
+            $.ajax({
+                url: '{{ url_for("sync_content") }}',
+                type: 'POST',
+                success: function(response) {
+                    alert(response.message);
+                    $('#syncButton').prop('disabled', false).text('同步最近7天内容');
+                    if (response.status === 'success') {
+                        location.reload(); // 同步成功后刷新页面
+                    }
+                },
+                error: function(xhr, status, error) {
+                    alert('同步失败: ' + xhr.responseText);
+                    $('#syncButton').prop('disabled', false).text('同步最近7天内容');
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

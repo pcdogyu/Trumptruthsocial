@@ -1,4 +1,6 @@
-Flask
 PyYAML
+requests
+Flask
+beautifulsoup4
 selenium
 webdriver-manager

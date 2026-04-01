@@ -9,7 +9,7 @@ import threading
 
 # 导入您编写的监视器类
 from monitor import TruthSocialMonitor
-import database # 导入新的数据库模块
+import database # 导入数据库模块
 from app import app, create_templates_if_not_exists # 导入 Flask app 和模板创建函数
 
 # --- 常量定义 ---
@@ -101,7 +101,7 @@ def monitor_worker():
     logging.info("正在启动 TruthSocial 监视器...")
 
     config = load_config()
-
+    
     if not config.get('telegram', {}).get('bot_token') or not config.get('telegram', {}).get('chat_id') or config.get('telegram', {}).get('bot_token') == "YOUR_TELEGRAM_BOT_TOKEN":
         logging.error("错误：Telegram 的 'bot_token' 或 'chat_id' 未在 config.yaml 中正确配置。")
         sys.exit(1)
@@ -113,7 +113,7 @@ def monitor_worker():
     try:
         while True:
             logging.info("--- 开始新的监控周期 ---")
-            # 每次循环重新加载配置，以便动态更新监控列表
+            # 每次循环重新加载配置，以便动态更新监控列表和 Telegram 设置
             current_config = load_config()
             bot_token = current_config.get('telegram', {}).get('bot_token')
             chat_id = current_config.get('telegram', {}).get('chat_id')

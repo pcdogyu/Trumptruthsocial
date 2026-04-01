@@ -1,350 +1,463 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 import yaml
-from flask import Flask, render_template, request, redirect, url_for, flash, send_from_directory
 import os
-import requests
-import json
-import database # 导入数据库模块
+import logging
+import threading
+import time
 
-# 定义配置文件的绝对路径
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
+# 假设 database 模块已存在
+import database
+
+# 假设 main 模块中的 monitor_worker 和 load_config 函数
+# 为了避免循环导入，这里不直接导入 main.py，而是模拟其功能或从 config.yaml 读取
+# 实际项目中，可能需要将 monitor_worker 封装到单独的服务层，或者通过队列/事件机制通信
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24) # 用于 flash 消息的安全密钥
+app.secret_key = 'supersecretkey' # 生产环境中应使用更安全的密钥
 
-def send_telegram_message(bot_token, chat_id, text):
-    """使用 HTML 格式发送消息到 Telegram，并返回结果"""
-    api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': 'HTML',
-        'disable_web_page_preview': True
-    }
-    try:
-        response = requests.post(api_url, data=payload, timeout=10)
-        response.raise_for_status()
-        result = response.json()
-        return result.get('ok', False), result.get('description', 'Unknown error.')
-    except requests.exceptions.RequestException as e:
-        return False, str(e)
+CONFIG_FILE = 'config.yaml'
+TEMPLATES_DIR = 'templates'
 
-def load_config():
-    """加载 YAML 配置文件"""
+# 全局变量，用于存储配置和监控状态
+# 注意：在多线程/多进程环境中，直接修改全局变量需要加锁
+# 这里为了简化，暂时不加锁，但实际生产环境需要考虑并发问题
+global_config = {}
+config_last_modified = 0
+
+# --- 日志配置 ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def load_config_from_file(path=CONFIG_FILE):
+    """从文件加载 YAML 配置文件"""
     try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
+        logging.error(f"错误：配置文件 '{path}' 未找到。")
+        return {}
+    except yaml.YAMLError as e:
+        logging.error(f"错误：解析配置文件 '{path}' 时出错: {e}")
         return {}
 
-def save_config(config_data):
-    """保存数据到 YAML 配置文件"""
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        yaml.dump(config_data, f, allow_unicode=True, sort_keys=False)
+def get_current_config():
+    """获取最新的配置，如果文件有更新则重新加载"""
+    global global_config, config_last_modified
+    try:
+        current_modified = os.path.getmtime(CONFIG_FILE)
+        if current_modified > config_last_modified:
+            logging.info("config.yaml 已更新，重新加载配置。")
+            global_config = load_config_from_file(CONFIG_FILE)
+            config_last_modified = current_modified
+    except FileNotFoundError:
+        logging.warning(f"config.yaml 未找到，使用空配置。")
+        global_config = {}
+    except Exception as e:
+        logging.error(f"检查或加载 config.yaml 时出错: {e}")
+    return global_config
 
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(os.path.join(app.root_path),
-                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
+def mask_api_key(key):
+    """遮蔽 API Key，仅显示开头和结尾的四位字符"""
+    if not key or len(key) <= 8:
+        return key
+    return key[:4] + '*' * (len(key) - 8) + key[-4:]
 
-@app.route('/', methods=['GET', 'POST'])
-def settings():
-    config = load_config()
-    # 定义一个特殊的占位符来表示未更改
-    TOKEN_PLACEHOLDER_PREFIX = "********"
-
-    if request.method == 'POST':
-        # 更新监控账户列表
-        accounts_str = request.form.get('accounts_to_monitor', '')
-        accounts_list = [acc.strip() for acc in accounts_str.splitlines() if acc.strip()]
-        config['accounts_to_monitor'] = sorted(list(set(accounts_list)))
-
-        # 更新刷新间隔
-        config['refresh_interval'] = request.form.get('refresh_interval', '5m')
-
-        # 更新 Truth Social 认证设置
-        if 'auth' not in config: config['auth'] = {}
-        config['auth']['bearer_token'] = request.form.get('auth_bearer_token', '')
-
-        # 更新 Telegram 设置
-        if 'telegram' not in config: config['telegram'] = {}
-        
-        # 处理 Bot Token 的更新逻辑
-        new_bot_token = request.form.get('telegram_bot_token', '').strip()
-        # 只有当用户输入了新的、非占位符的 Token 时才更新
-        if new_bot_token and not new_bot_token.startswith(TOKEN_PLACEHOLDER_PREFIX):
-            config['telegram']['bot_token'] = new_bot_token
-        # 如果用户提交的是空字符串，也更新（允许用户清空Token）
-        elif not new_bot_token:
-            config['telegram']['bot_token'] = ''
-
-        # 对 chat_id 做一个简单的类型转换尝试
-        chat_id_str = request.form.get('telegram_chat_id', '')
-        try:
-            config['telegram']['chat_id'] = int(chat_id_str)
-        except (ValueError, TypeError):
-            config['telegram']['chat_id'] = chat_id_str
-
-        # 更新 AI 分析设置
-        if 'ai_analysis' not in config: config['ai_analysis'] = {}
-        config['ai_analysis']['enabled'] = 'ai_enabled' in request.form
-        config['ai_analysis']['api_key'] = request.form.get('ai_api_key', '')
-        config['ai_analysis']['prompt'] = request.form.get('ai_prompt', '')
-
-        save_config(config)
-        flash('配置已成功保存！后台脚本将在下一个周期加载新配置。', 'success')
-        return redirect(url_for('settings'))
-
-    # 为 GET 请求准备用于显示的数据
-    accounts_text = "\n".join(config.get('accounts_to_monitor', []))
-    
-    # 创建一个用于显示的配置副本
-    display_config = json.loads(json.dumps(config))
-
-    # 遮蔽 Bot Token
-    bot_token = display_config.get('telegram', {}).get('bot_token', '')
-    if bot_token and len(bot_token) > 8:
-        masked_token = f"{bot_token[:4]}...{bot_token[-4:]}"
-        # 使用一个可识别的前缀，以便在 POST 时判断
-        display_config['telegram']['bot_token'] = f"{TOKEN_PLACEHOLDER_PREFIX}{masked_token}"
-    elif bot_token: # 如果token不够长，就全显示
-        display_config['telegram']['bot_token'] = bot_token
-
-
-    return render_template('index.html', config=display_config, accounts_text=accounts_text)
-
-@app.route('/history')
-def history():
-    """显示历史帖子页面"""
-    posts = database.get_recent_posts(limit=100) # 从数据库获取历史记录
-    return render_template('history.html', posts=posts)
-
-@app.route('/test-telegram', methods=['POST'])
-def test_telegram():
-    """发送 Telegram 测试消息"""
-    config = load_config()
-    bot_token = config.get('telegram', {}).get('bot_token')
-    chat_id = config.get('telegram', {}).get('chat_id')
-
-    if not bot_token or not chat_id or 'YOUR_TELEGRAM_BOT_TOKEN' in bot_token:
-        flash('Telegram Bot Token 或 Chat ID 未在配置页面中正确设置。', 'danger')
-        return redirect(url_for('settings'))
-
-    test_message = "✅ 这是一条来自 TruthSocial Monitor Web UI 的测试消息。\n\n如果您收到此消息，说明您的 Telegram 配置正确！"
-    success, description = send_telegram_message(bot_token, chat_id, test_message)
-
-    if success:
-        flash('测试消息已成功发送！请检查您的 Telegram。', 'success')
-    else:
-        flash(f'发送测试消息失败: {description}', 'danger')
-    
-    return redirect(url_for('settings'))
+def save_config(config_data, path=CONFIG_FILE):
+    """保存配置到 YAML 文件"""
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(config_data, f, default_flow_style=False, allow_unicode=True)
+        global config_last_modified
+        config_last_modified = os.path.getmtime(CONFIG_FILE) # 更新修改时间
+        logging.info(f"配置已保存到 '{path}'。")
+        return True
+    except Exception as e:
+        logging.error(f"保存配置到 '{path}' 时出错: {e}")
+        return False
 
 def create_templates_if_not_exists():
-    """如果模板文件不存在，则创建它们"""
-    templates_dir = 'templates'
-    index_path = os.path.join(templates_dir, 'index.html')
-    history_path = os.path.join(templates_dir, 'history.html')
+    """创建必要的模板文件，如果它们不存在的话"""
+    if not os.path.exists(TEMPLATES_DIR):
+        os.makedirs(TEMPLATES_DIR)
 
-    os.makedirs(templates_dir, exist_ok=True)
+    # layout.html
+    layout_path = os.path.join(TEMPLATES_DIR, 'layout.html')
+    if not os.path.exists(layout_path):
+        with open(layout_path, 'w', encoding='utf-8') as f:
+            f.write("""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TruthSocial Monitor{% endblock %}</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body { padding-top: 70px; }
+        .footer {
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            height: 60px; /* Set the fixed height of the footer here */
+            line-height: 60px; /* Vertically center the text there */
+            background-color: #f5f5f5;
+            text-align: center;
+        }
+        .post-card {
+            margin-bottom: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .post-card .card-header {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        .post-card .card-body {
+            padding: 15px;
+        }
+        .post-card .card-footer {
+            background-color: #f8f9fa;
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+        .post-card .card-text {
+            white-space: pre-wrap; /* Preserve whitespace and line breaks */
+            word-wrap: break-word; /* Break long words */
+        }
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+            overflow: hidden;
+            max-width: 100%;
+            background: #000;
+            margin-top: 10px;
+        }
+        .video-container iframe,
+        .video-container video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
+        <a class="navbar-brand" href="{{ url_for('index') }}">TruthSocial Monitor</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
+                    <a class="nav-link" href="{{ url_for('index') }}">配置</a>
+                </li>
+                <li class="nav-item {% if request.endpoint == 'content' %}active{% endif %}">
+                    <a class="nav-link" href="{{ url_for('content') }}">内容</a>
+                </li>
+            </ul>
+        </div>
+    </nav>
 
+    <main role="main" class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <span class="text-muted">© 2023 TruthSocial Monitor</span>
+        </div>
+    </footer>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+""")
+        logging.info(f"Created {layout_path}")
+
+    # index.html
+    index_path = os.path.join(TEMPLATES_DIR, 'index.html')
     if not os.path.exists(index_path):
         with open(index_path, 'w', encoding='utf-8') as f:
             f.write("""
-<!DOCTYPE html>
-<html lang="zh-cn">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>监控配置</title>
-    <style>
-        body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
-        .container { max-width: 700px; margin: auto; padding: 2em; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; }
-        label { display: block; margin-bottom: 0.5em; font-weight: bold; }
-        input[type="text"], textarea { width: 97%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 1em; }
-        textarea { font-family: monospace; }
-        .checkbox-label { display: flex; align-items: center; font-weight: normal; }
-        .checkbox-label input { margin-right: 0.5em; }
-        .save-btn { background: #007bff; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 1.1em; width: 100%; margin-top: 1.5em; }
-        .save-btn:hover { background: #0056b3; }
-        .test-btn { background: #17a2b8; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; }
-        .test-btn:hover { background: #138496; }
-        .alert { padding: 1em; margin-bottom: 1em; border-radius: 5px; }
-        .alert-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .alert-danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .nav-links { margin-bottom: 1.5em; font-size: 1.2em; border-bottom: 1px solid #eee; padding-bottom: 1em;}
-        .nav-links a { text-decoration: none; color: #007bff; margin-right: 1em; }
-        .nav-links a.active { font-weight: bold; }
-        /* Tab styles */
-        .tab { overflow: hidden; border: 1px solid #ccc; background-color: #f1f1f1; border-radius: 5px 5px 0 0; }
-        .tab button { background-color: inherit; float: left; border: none; outline: none; cursor: pointer; padding: 14px 16px; transition: 0.3s; font-size: 0.95em; }
-        .tab button:hover { background-color: #ddd; }
-        .tab button.active { background-color: #ccc; }
-        .tabcontent { display: none; padding: 20px 12px; border: 1px solid #ccc; border-top: none; border-radius: 0 0 5px 5px; animation: fadeEffect 0.5s; }
-        @keyframes fadeEffect { from {opacity: 0;} to {opacity: 1;} }
-        .form-section { margin-bottom: 1.5em; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>监控配置</h1>
-        <div class="nav-links">
-            <a href="{{ url_for('settings') }}" class="active">配置</a> | <a href="{{ url_for('history') }}">历史记录</a>
-        </div>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div class="alert alert-{{ category }}">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
+{% extends "layout.html" %}
 
-        <div class="tab">
-            <button class="tablinks" onclick="openTab(event, 'Accounts')">监控账户</button>
-            <button class="tablinks" onclick="openTab(event, 'Timing')">时间配置</button>
-            <button class="tablinks" onclick="openTab(event, 'Auth')">Truth Social 认证</button>
-            <button class="tablinks" onclick="openTab(event, 'AI')">AI 分析</button>
-            <button class="tablinks" onclick="openTab(event, 'Notifications')">通知消息</button>
-        </div>
+{% block title %}配置{% endblock %}
 
-        <form method="POST">
-            <div id="Accounts" class="tabcontent">
-                <div class="form-section">
-                    <label for="accounts_to_monitor">每行一个账户名</label>
-                    <textarea id="accounts_to_monitor" name="accounts_to_monitor" rows="5" placeholder="例如:&#10;realDonaldTrump&#10;another_user">{{ accounts_text }}</textarea>
-                </div>
-            </div>
+{% block content %}
+<h1 class="mt-5">配置</h1>
 
-            <div id="Timing" class="tabcontent">
-                <div class="form-section">
-                    <label for="refresh_interval">刷新间隔 (例如: 5m, 1h, 30s)</label>
-                    <input type="text" id="refresh_interval" name="refresh_interval" value="{{ config.get('refresh_interval', '5m') }}">
-                </div>
-            </div>
-
-            <div id="Auth" class="tabcontent">
-                <div class="form-section">
-                    <label for="auth_bearer_token">Bearer Token (可选)</label>
-                    <input type="text" id="auth_bearer_token" name="auth_bearer_token" value="{{ config.get('auth', {}).get('bearer_token', '') }}">
-                </div>
-            </div>
-
-            <div id="AI" class="tabcontent">
-                <div class="form-section">
-                    <label class="checkbox-label">
-                        <input type="checkbox" name="ai_enabled" {% if config.get('ai_analysis', {}).get('enabled') %}checked{% endif %}>
-                        启用 AI 分析
-                    </label>
-                </div>
-                <div class="form-section">
-                    <label for="ai_api_key">API Key</label>
-                    <input type="text" id="ai_api_key" name="ai_api_key" value="{{ config.get('ai_analysis', {}).get('api_key', '') }}">
-                </div>
-                <div class="form-section">
-                    <label for="ai_prompt">Prompt</label>
-                    <textarea id="ai_prompt" name="ai_prompt" rows="3">{{ config.get('ai_analysis', {}).get('prompt', '') }}</textarea>
-                </div>
-            </div>
-
-            <div id="Notifications" class="tabcontent">
-                <div class="form-section">
-                    <label for="telegram_bot_token">Bot Token</label>
-                    <input type="text" id="telegram_bot_token" name="telegram_bot_token" value="{{ config.get('telegram', {}).get('bot_token', '') }}">
-                </div>
-                <div class="form-section">
-                    <label for="telegram_chat_id">Chat ID</label>
-                    <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="{{ config.get('telegram', {}).get('chat_id', '') }}">
-                </div>
-                <div class="form-section" style="margin-top: 2em; padding-top: 2em; border-top: 1px solid #eee;">
-                    <h2>测试 Telegram 推送</h2>
-                    <p>点击下方按钮，将发送一条测试消息到您配置的 Chat ID。</p>
-                    <!-- 这个按钮会提交一个隐藏的、独立的表单，以避免与主设置表单冲突 -->
-                    <button type="button" class="test-btn" onclick="document.getElementById('test-telegram-form').submit();">发送测试消息</button>
-                </div>
-            </div>
-
-            <button type="submit" class="save-btn">保存所有配置</button>
-        </form>
-
-        <!-- 用于测试按钮的隐藏表单 -->
-        <form action="{{ url_for('test_telegram') }}" method="POST" id="test-telegram-form" style="display: none;"></form>
+<form method="POST" action="{{ url_for('save_config_route') }}">
+    <div class="form-group">
+        <label for="bearer_token">Bearer Token:</label>
+        <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{ config.auth.bearer_token if config.auth else '' }}">
+        <small class="form-text text-muted">从 `get_token.py` 获取的认证令牌。</small>
     </div>
 
-    <script>
-    function openTab(evt, tabName) {
-        var i, tabcontent, tablinks;
-        tabcontent = document.getElementsByClassName("tabcontent");
-        for (i = 0; i < tabcontent.length; i++) {
-            tabcontent[i].style.display = "none";
-        }
-        tablinks = document.getElementsByClassName("tablinks");
-        for (i = 0; i < tablinks.length; i++) {
-            tablinks[i].className = tablinks[i].className.replace(" active", "");
-        }
-        document.getElementById(tabName).style.display = "block";
-        evt.currentTarget.className += " active";
-    }
-    // 默认打开第一个标签页
-    document.addEventListener("DOMContentLoaded", function() {
-        document.getElementsByClassName("tablinks")[0].click();
-    });
-    </script>
-</body>
-</html>
-""")
+    <div class="form-group">
+        <label for="bot_token">Telegram Bot Token:</label>
+        <input type="text" class="form-control" id="bot_token" name="bot_token" value="{{ config.telegram.bot_token if config.telegram else '' }}">
+        <small class="form-text text-muted">从 BotFather 获取的 Telegram 机器人令牌。</small>
+    </div>
 
-    if not os.path.exists(history_path):
-        with open(history_path, 'w', encoding='utf-8') as f:
+    <div class="form-group">
+        <label for="chat_id">Telegram Chat ID:</label>
+        <input type="text" class="form-control" id="chat_id" name="chat_id" value="{{ config.telegram.chat_id if config.telegram else '' }}">
+        <small class="form-text text-muted">接收通知的 Telegram 聊天 ID。</small>
+    </div>
+
+    <div class="form-group">
+        <label for="refresh_interval">刷新间隔:</label>
+        <input type="text" class="form-control" id="refresh_interval" name="refresh_interval" value="{{ config.refresh_interval if config.refresh_interval else '5m' }}">
+        <small class="form-text text-muted">例如: 5m (5分钟), 1h (1小时)。</small>
+    </div>
+
+    <div class="form-group">
+        <label for="accounts_to_monitor">监控账户 (每行一个用户名):</label>
+        <textarea class="form-control" id="accounts_to_monitor" name="accounts_to_monitor" rows="5">{{ "\n".join(config.accounts_to_monitor) if config.accounts_to_monitor else '' }}</textarea>
+        <small class="form-text text-muted">要监控的 Truth Social 用户名，每行一个。</small>
+    </div>
+
+    <button type="submit" class="btn btn-primary">保存配置</button>
+</form>
+""")
+        logging.info(f"Created {index_path}")
+
+    # content.html (New template for this request)
+    content_path = os.path.join(TEMPLATES_DIR, 'content.html')
+    if not os.path.exists(content_path):
+        with open(content_path, 'w', encoding='utf-8') as f:
             f.write("""
-<!DOCTYPE html>
-<html lang="zh-cn">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>历史记录</title>
-    <style>
-        body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
-        .container { max-width: 800px; margin: auto; padding: 2em; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1 { color: #333; }
-        .nav-links { margin-bottom: 1.5em; font-size: 1.2em; border-bottom: 1px solid #eee; padding-bottom: 1em;}
-        .nav-links a { text-decoration: none; color: #007bff; margin-right: 1em; }
-        .nav-links a.active { font-weight: bold; }
-        .post { border: 1px solid #ddd; border-radius: 5px; padding: 1em; margin-bottom: 1em; background-color: #fdfdfd; }
-        .post-video { margin-bottom: 1em; }
-        .post-header { font-weight: bold; margin-bottom: 0.5em; color: #555; }
-        .post-content { white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; }
-        .post-footer { margin-top: 1em; font-size: 0.9em; text-align: right; }
-        .post-footer a { text-decoration: none; color: #007bff; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>历史记录</h1>
-        <div class="nav-links">
-            <a href="{{ url_for('settings') }}">配置</a> | <a href="{{ url_for('history') }}" class="active">历史记录</a>
+{% extends "layout.html" %}
+
+{% block title %}历史内容{% endblock %}
+
+{% block content %}
+<h1 class="mt-5">历史内容</h1>
+
+<div class="mb-3">
+    <button id="syncButton" class="btn btn-info">同步最近7天内容</button>
+    <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近7天的帖子。</small>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="list-group">
+            <a href="{{ url_for('content') }}" class="list-group-item list-group-item-action {% if not selected_username %}active{% endif %}">所有账户</a>
+            {% for user in usernames %}
+            <a href="{{ url_for('content', username=user) }}" class="list-group-item list-group-item-action {% if selected_username == user %}active{% endif %}">{{ user }}</a>
+            {% endfor %}
         </div>
+    </div>
+    <div class="col-md-9">
         {% if posts %}
             {% for post in posts %}
-            <div class="post">
-                <div class="post-header">@{{ post.username }}</div>
-                {% if post.video_url %}
-                <div class="post-video">
-                    <video controls preload="metadata" style="max-width: 100%; border-radius: 5px;">
-                        <source src="{{ post.video_url }}" type="video/mp4">
-                        您的浏览器不支持视频播放。
-                    </video>
+            <div class="card post-card">
+                <div class="card-header">
+                    <a href="https://truthsocial.com/@{{ post.username }}" target="_blank">@{{ post.username }}</a>
+                    <span class="float-right text-muted">{{ post.timestamp }}</span>
                 </div>
-                {% endif %}
-                {% if post.content %}
-                <div class="post-content">{{ post.content }}</div>
-                {% endif %}
-                <div class="post-footer"><a href="{{ post.web_url }}" target="_blank" rel="noopener noreferrer">查看原文 &rarr;</a></div>
+                <div class="card-body">
+                    <p class="card-text">{{ post.content }}</p>
+                    {% if post.video_url %}
+                        <div class="video-container">
+                            <video controls preload="metadata" style="width: 100%; height: auto;">
+                                <source src="{{ post.video_url }}" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                        </div>
+                    {% endif %}
+                    <a href="{{ post.web_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">查看原文</a>
+                </div>
+                <div class="card-footer">
+                    Post ID: {{ post.id }}
+                </div>
             </div>
             {% endfor %}
         {% else %}
-            <p>暂无历史记录。请等待后台脚本抓取到新帖子。</p>
+            <p>没有找到历史帖子。</p>
         {% endif %}
     </div>
-</body>
-</html>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        $('#syncButton').on('click', function() {
+            $(this).prop('disabled', true).text('同步中...');
+            $.ajax({
+                url: '{{ url_for("sync_content") }}',
+                type: 'POST',
+                success: function(response) {
+                    alert(response.message);
+                    $('#syncButton').prop('disabled', false).text('同步最近7天内容');
+                    if (response.status === 'success') {
+                        location.reload(); // 同步成功后刷新页面
+                    }
+                },
+                error: function(xhr, status, error) {
+                    alert('同步失败: ' + xhr.responseText);
+                    $('#syncButton').prop('disabled', false).text('同步最近7天内容');
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}
 """)
+        logging.info(f"Created {content_path}")
+
+# Flask Routes
+@app.route('/')
+def index():
+    config = get_current_config() # 获取当前配置
+    ai_api_key = config.get('ai_analysis', {}).get('api_key', '')
+    masked_ai_api_key = mask_api_key(ai_api_key) # 遮蔽 API Key
+    return render_template('index.html', config=config, masked_ai_api_key=masked_ai_api_key)
+
+@app.route('/save_config', methods=['POST'])
+def save_config_route():
+    new_config = get_current_config() # 获取当前配置作为基础
+    
+    # 更新 AI 分析设置
+    if 'ai_analysis' not in new_config:
+        new_config['ai_analysis'] = {}
+    
+    # Checkbox 的值在 request.form 中存在即为选中
+    new_config['ai_analysis']['enabled'] = 'ai_enabled' in request.form 
+    
+    submitted_ai_api_key = request.form.get('ai_api_key', '').strip()
+    # 如果提交的 API Key 包含星号，说明用户没有修改，保留旧值
+    # 否则，更新为新提交的值
+    if '*' not in submitted_ai_api_key:
+        new_config['ai_analysis']['api_key'] = submitted_ai_api_key
+    # 如果用户提交的是空字符串，也应该更新为空
+    elif not submitted_ai_api_key:
+        new_config['ai_analysis']['api_key'] = ''
+
+    new_config['ai_analysis']['prompt'] = request.form.get('ai_prompt', '').strip()
+
+    # 更新 auth
+    if 'auth' not in new_config:
+        new_config['auth'] = {}
+    new_config['auth']['bearer_token'] = request.form.get('bearer_token', '').strip()
+
+    # 更新 telegram
+    if 'telegram' not in new_config:
+        new_config['telegram'] = {}
+    new_config['telegram']['bot_token'] = request.form.get('bot_token', '').strip()
+    new_config['telegram']['chat_id'] = request.form.get('chat_id', '').strip()
+
+    # 更新 refresh_interval
+    new_config['refresh_interval'] = request.form.get('refresh_interval', '5m').strip()
+
+    # 更新 accounts_to_monitor
+    accounts_str = request.form.get('accounts_to_monitor', '').strip()
+    new_config['accounts_to_monitor'] = [acc.strip() for acc in accounts_str.split('\n') if acc.strip()]
+
+    if save_config(new_config):
+        flash('配置已成功保存！', 'success')
+    else:
+        flash('保存配置失败！', 'danger')
+    return redirect(url_for('index'))
+
+@app.route('/content')
+def content():
+    selected_username = request.args.get('username')
+    if selected_username:
+        posts = database.get_all_posts(username=selected_username, limit=50) # 限制显示数量
+    else:
+        posts = database.get_all_posts(limit=50) # 限制显示数量
+    
+    usernames = database.get_unique_usernames()
+    return render_template('content.html', posts=posts, usernames=usernames, selected_username=selected_username)
+
+# 全局变量，用于控制同步线程
+sync_thread = None
+sync_in_progress = False
+
+def _sync_worker(app_context, monitor_instance, accounts_to_sync, days_to_sync=7):
+    """
+    后台同步工作函数。
+    注意：这个函数需要一个 TruthSocialMonitor 实例，并且能够获取到配置。
+    为了避免循环导入，这里假设 monitor_instance 已经传入。
+    """
+    global sync_in_progress
+    with app_context: # 确保在 Flask 应用上下文中运行
+        logging.info(f"开始同步最近 {days_to_sync} 天的内容...")
+        sync_in_progress = True
+        try:
+            # 调用 TruthSocialMonitor 中新的历史帖子抓取方法，该方法使用 Selenium 模拟滚动来获取历史数据。
+            # 注意：此方法会启动一个无头浏览器实例，相对更耗费资源和时间。
+            # 实际的 Truth Social 网站结构可能会变化，导致抓取逻辑失效，需要定期检查和更新。
+            # max_scrolls 和 max_posts_per_user 参数可以在 monitor.py 中调整。
+
+            logging.warning("注意：当前的 TruthSocialMonitor.fetch_latest_posts 方法可能无法有效获取所有历史7天内容。")
+            logging.warning("它通常只抓取页面上可见的最新帖子。要实现完整的历史同步，需要更复杂的抓取逻辑。")
+
+            for username in accounts_to_sync:
+                logging.info(f"正在同步用户 @{username} 的内容...")
+                # 假设 fetch_latest_posts 能够获取到足够多的帖子，
+                # 并且数据库的 is_post_seen 会处理重复。
+                # 理想情况下，这里应该有一个专门用于历史抓取的方法，
+                # 能够处理分页或日期范围。现在我们使用 Selenium 方法。
+                posts = monitor_instance.fetch_historical_posts_selenium(username, days_to_sync=days_to_sync)
+                for post in posts:
+                    if database.add_post(post): # add_post 会自动检查是否已存在
+                        logging.info(f"已同步并添加新帖子: {post.get('id')} by @{username}")
+                time.sleep(1) # 避免请求过快
+
+            logging.info(f"最近 {days_to_sync} 天内容同步完成。")
+            flash('内容同步成功！', 'success')
+        except Exception as e:
+            logging.error(f"同步内容时发生错误: {e}")
+            flash(f'内容同步失败: {e}', 'danger')
+        finally:
+            sync_in_progress = False
+
+@app.route('/sync_content', methods=['POST'])
+def sync_content():
+    global sync_thread, sync_in_progress
+    if sync_in_progress:
+        return jsonify({'status': 'info', 'message': '同步操作正在进行中，请稍候。'}), 202
+
+    config = get_current_config()
+    accounts_to_monitor = config.get('accounts_to_monitor', [])
+    if not accounts_to_monitor:
+        return jsonify({'status': 'error', 'message': '没有配置要监控的账户，无法同步。'}), 400
+
+    # 导入 TruthSocialMonitor 类
+    # 避免循环导入，这里假设 monitor.py 可以在需要时被导入
+    # 或者，更好的做法是将 monitor_worker 封装成一个可调用的函数，并传入必要的依赖
+    try:
+        from monitor import TruthSocialMonitor
+        monitor_instance = TruthSocialMonitor(config)
+    except Exception as e:
+        logging.error(f"无法创建 TruthSocialMonitor 实例: {e}")
+        return jsonify({'status': 'error', 'message': f'无法初始化监控器: {e}'}), 500
+
+    # 在新线程中启动同步任务
+    app_context = app.app_context()
+    sync_thread = threading.Thread(target=_sync_worker, args=(app_context, monitor_instance, accounts_to_monitor, 7))
+    sync_thread.daemon = True # 设置为守护线程，主程序退出时自动终止
+    sync_thread.start()
+
+    return jsonify({'status': 'success', 'message': '同步任务已在后台启动。请稍后刷新页面查看结果。'}), 200

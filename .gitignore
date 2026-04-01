@@ -1,9 +1,22 @@
-# Ignore configuration files with sensitive data
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*build/
+*dist/
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Configuration - contains sensitive data
 config.yaml
 
-# Ignore local database files
-*.db
-*.db-journal
+# Database file
+monitor.db
 
-# Ignore Python cache files
-__pycache__/
+# Screenshot files for debugging
+login_error.png
