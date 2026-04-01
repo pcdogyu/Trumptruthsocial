@@ -30,7 +30,7 @@ refresh_interval: "5m"
 # If the website structure changes, you may need to update these values.
 selectors:
   # Selector for a single post article/container element
-  post_container: 'article[data-id]'
+  post_container: 'div.status[data-id], article[data-id], div[data-id]'
   # Attribute name that holds the post ID within the post_container
   post_id_attribute: 'data-id'
   # Selector for the div containing the main text content of a post

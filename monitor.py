@@ -88,7 +88,7 @@ class TruthSocialMonitor:
         从帖子元素中解析时间戳。
         假设时间戳在 <time> 标签的 datetime 属性中，例如: <time datetime="2023-10-27T10:00:00Z">
         """
-        time_element = post_element.find(self.post_timestamp_tag_selector)
+        time_element = post_element.select_one(self.post_timestamp_tag_selector)
         if time_element and self.post_timestamp_attribute in time_element.attrs:
             try:
                 timestamp_str = time_element[self.post_timestamp_attribute]
@@ -149,27 +149,32 @@ class TruthSocialMonitor:
             soup = BeautifulSoup(driver.page_source, 'html.parser')
             posts = []
 
-            # Use configurable CSS selectors
-            post_elements = soup.find_all(self.post_container_selector)
+            # 必须使用 select() 来解析 CSS 选择器
+            post_elements = soup.select(self.post_container_selector)
 
             for element in post_elements:
                 post_id = element.get(self.post_id_attribute)
                 if not post_id:
                     continue # 如果没有 ID 则跳过
 
-                content_element = element.find(self.post_content_div_selector)
+                content_element = element.select_one(self.post_content_div_selector)
                 content = content_element.get_text(strip=True) if content_element else ''
                 
-                web_url_element = element.find(self.post_web_url_anchor_selector)
+                # 备用方案：如果未找到特定 div 的内容，直接提取整个 article 块的文本
+                if not content:
+                    content = element.get_text(separator='\n', strip=True)
+                    if len(content) > 1000: content = content[:1000] + "..."
+                
+                web_url_element = element.select_one(self.post_web_url_anchor_selector)
                 web_url = web_url_element['href'] if web_url_element and 'href' in web_url_element.attrs else profile_url
 
                 # --- 新增：检查视频 ---
                 video_url = None
-                video_container = element.find(self.video_container_div_selector) 
+                video_container = element.select_one(self.video_container_div_selector) 
                 if video_container:
-                    video_tag = video_container.find(self.video_tag_selector)
+                    video_tag = video_container.select_one(self.video_tag_selector)
                     if video_tag:
-                        source_tag = video_tag.find(self.video_source_tag_selector)
+                        source_tag = video_tag.select_one(self.video_source_tag_selector)
                         if source_tag and source_tag.get('src'):
                             video_url = source_tag['src']
                         # 否则直接从 <video> 标签获取
@@ -245,7 +250,7 @@ class TruthSocialMonitor:
 
             # 解析当前页面源
             soup = BeautifulSoup(driver.page_source, 'html.parser')
-            post_elements = soup.find_all('article', attrs={'data-id': True})
+            post_elements = soup.select(self.post_container_selector)
 
             posts_in_current_scroll = 0
             for element in post_elements:
@@ -260,18 +265,23 @@ class TruthSocialMonitor:
                     stop_fetching = True
                     break # 停止处理当前滚动中的帖子，并跳出外部滚动循环
 
-                content_element = element.find('div', class_='status__content')
+                content_element = element.select_one(self.post_content_div_selector)
                 content = content_element.get_text(strip=True) if content_element else ''
                 
-                web_url_element = element.find('a', class_='status__relative-time')
+                # 备用方案：如果未找到特定 div 的内容，直接提取整个 article 块的文本
+                if not content:
+                    content = element.get_text(separator='\n', strip=True)
+                    if len(content) > 1000: content = content[:1000] + "..."
+                
+                web_url_element = element.select_one(self.post_web_url_anchor_selector)
                 web_url = web_url_element['href'] if web_url_element and 'href' in web_url_element.attrs else profile_url + f"/{post_id}"
 
                 video_url = None
-                video_container = element.find('div', class_='media-gallery__item-video-container') 
+                video_container = element.select_one(self.video_container_div_selector) 
                 if video_container:
-                    video_tag = video_container.find('video')
+                    video_tag = video_container.select_one(self.video_tag_selector)
                     if video_tag:
-                        source_tag = video_tag.find('source')
+                        source_tag = video_tag.select_one(self.video_source_tag_selector)
                         if source_tag and source_tag.get('src'):
                             video_url = source_tag['src']
                         elif video_tag.get('src'):

@@ -58,20 +58,23 @@ def send_telegram_video(bot_token, chat_id, video_url, caption):
         'caption': caption,
         'parse_mode': 'HTML'
     }
-    try:
-        # 视频上传可能需要更长时间，增加超时
-        response = requests.post(api_url, data=payload, timeout=60)
-        response.raise_for_status()
-        result = response.json()
-        if result.get('ok'):
-            logging.info(f"成功发送视频到 Chat ID: {chat_id}")
-            return True
-        else:
-            logging.error(f"Telegram API 错误 (sendVideo): {result.get('description')}")
-            return False
-    except requests.exceptions.RequestException as e:
-        logging.error(f"发送 Telegram 视频时网络错误: {e}")
-        return False
+    for attempt in range(30):
+        try:
+            # 视频上传可能需要更长时间，增加超时
+            response = requests.post(api_url, data=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            if result.get('ok'):
+                logging.info(f"成功发送视频到 Chat ID: {chat_id}")
+                return True
+            else:
+                logging.error(f"Telegram API 错误 (sendVideo) [第 {attempt+1}/30 次尝试]: {result.get('description')}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"发送 Telegram 视频时网络错误 [第 {attempt+1}/30 次尝试]: {e}")
+        
+        if attempt < 29:
+            time.sleep(3)
+    return False
 
 def send_telegram_message(bot_token, chat_id, text):
     """使用 HTML 格式发送消息到 Telegram"""
@@ -82,19 +85,22 @@ def send_telegram_message(bot_token, chat_id, text):
         'parse_mode': 'HTML',
         'disable_web_page_preview': False
     }
-    try:
-        response = requests.post(api_url, data=payload, timeout=10)
-        response.raise_for_status()
-        result = response.json()
-        if result.get('ok'):
-            logging.info(f"成功发送消息到 Chat ID: {chat_id}")
-            return True
-        else:
-            logging.error(f"Telegram API 错误: {result.get('description')}")
-            return False
-    except requests.exceptions.RequestException as e:
-        logging.error(f"发送 Telegram 消息时网络错误: {e}")
-        return False
+    for attempt in range(30):
+        try:
+            response = requests.post(api_url, data=payload, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            if result.get('ok'):
+                logging.info(f"成功发送消息到 Chat ID: {chat_id}")
+                return True
+            else:
+                logging.error(f"Telegram API 错误 [第 {attempt+1}/30 次尝试]: {result.get('description')}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"发送 Telegram 消息时网络错误 [第 {attempt+1}/30 次尝试]: {e}")
+        
+        if attempt < 29:
+            time.sleep(3)
+    return False
 
 def monitor_worker():
     """后台监控工作线程"""

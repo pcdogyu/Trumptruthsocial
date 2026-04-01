@@ -32,6 +32,11 @@ def init_db():
         cursor.execute('ALTER TABLE posts ADD COLUMN timestamp DATETIME DEFAULT CURRENT_TIMESTAMP')
         logging.info("'timestamp' 列已成功添加。")
 
+    if 'raw_data' not in columns:
+        logging.info("检测到 'posts' 表缺少 'raw_data' 列，正在添加...")
+        cursor.execute('ALTER TABLE posts ADD COLUMN raw_data TEXT')
+        logging.info("'raw_data' 列已成功添加。")
+
     conn.close()
     logging.info("数据库初始化完成。")
 

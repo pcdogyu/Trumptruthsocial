@@ -548,19 +548,25 @@ def _send_telegram_message_internal(bot_token, chat_id, text):
         'parse_mode': 'HTML',
         'disable_web_page_preview': True
     }
-    try:
-        response = requests.post(api_url, data=payload, timeout=10)
-        response.raise_for_status()
-        result = response.json()
-        if result.get('ok'):
-            logging.info(f"Test Telegram message sent successfully to Chat ID: {chat_id}")
-            return True, "测试消息发送成功！"
-        else:
-            logging.error(f"Telegram API error (test message): {result.get('description')}")
-            return False, f"Telegram API 错误: {result.get('description')}"
-    except requests.exceptions.RequestException as e:
-        logging.error(f"发送 Telegram 测试消息时网络错误: {e}")
-        return False, f"网络错误: {e}"
+    error_msg = "未知错误"
+    for attempt in range(30):
+        try:
+            response = requests.post(api_url, data=payload, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            if result.get('ok'):
+                logging.info(f"Test Telegram message sent successfully to Chat ID: {chat_id}")
+                return True, "测试消息发送成功！"
+            else:
+                logging.error(f"Telegram API error (test message) [第 {attempt+1}/30 次尝试]: {result.get('description')}")
+                error_msg = f"Telegram API 错误: {result.get('description')}"
+        except requests.exceptions.RequestException as e:
+            logging.error(f"发送 Telegram 测试消息时网络错误 [第 {attempt+1}/30 次尝试]: {e}")
+            error_msg = f"网络错误: {e}"
+        
+        if attempt < 29:
+            time.sleep(3)
+    return False, error_msg
 
 @app.route('/test_telegram_message', methods=['POST'])
 def test_telegram_message():
