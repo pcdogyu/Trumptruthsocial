@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,15 +62,16 @@ const (
 )
 
 type LoginSession struct {
-	ID         string
-	Username   string
-	ProfileDir string
-	Display    int
-	VNCPort    int
-	DebugPort  int
-	Chromium   string
-	LoginURL   string
-	StartedAt  time.Time
+	ID           string
+	Username     string
+	ProfileDir   string
+	ExtensionDir string
+	Display      int
+	VNCPort      int
+	DebugPort    int
+	Chromium     string
+	LoginURL     string
+	StartedAt    time.Time
 
 	mu        sync.RWMutex
 	state     LoginSessionState
@@ -144,34 +146,37 @@ func newLoginSession(username string) (*LoginSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	debugPort, err := freeTCPPort()
+	profileDir, err := os.MkdirTemp("", "truthsocial-login-session-*")
 	if err != nil {
 		return nil, err
 	}
-	profileDir, err := os.MkdirTemp("", "truthsocial-login-session-*")
+	extensionDir, err := os.MkdirTemp("", "truthsocial-login-extension-*")
 	if err != nil {
+		_ = os.RemoveAll(profileDir)
 		return nil, err
 	}
 
 	chromiumPath, err := findChromeExecPath()
 	if err != nil {
 		_ = os.RemoveAll(profileDir)
+		_ = os.RemoveAll(extensionDir)
 		return nil, err
 	}
 
 	return &LoginSession{
-		ID:         randID("login"),
-		Username:   username,
-		ProfileDir: profileDir,
-		Display:    display,
-		VNCPort:    vncPort,
-		DebugPort:  debugPort,
-		Chromium:   chromiumPath,
-		LoginURL:   loginSessionLoginURL,
-		StartedAt:  time.Now().UTC(),
-		state:      LoginSessionStarting,
-		message:    "正在启动远程登录窗口...",
-		done:       make(chan struct{}),
+		ID:           randID("login"),
+		Username:     username,
+		ProfileDir:   profileDir,
+		ExtensionDir: extensionDir,
+		Display:      display,
+		VNCPort:      vncPort,
+		DebugPort:    0,
+		Chromium:     chromiumPath,
+		LoginURL:     loginSessionLoginURL,
+		StartedAt:    time.Now().UTC(),
+		state:        LoginSessionStarting,
+		message:      "正在启动远程登录窗口...",
+		done:         make(chan struct{}),
 	}, nil
 }
 
@@ -249,6 +254,9 @@ func (s *LoginSession) startChromium() error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
+	if err := s.ensureCaptureExtension(); err != nil {
+		return err
+	}
 
 	cmd := exec.Command(s.Chromium,
 		"--no-first-run",
@@ -258,8 +266,8 @@ func (s *LoginSession) startChromium() error {
 		"--disable-blink-features=AutomationControlled",
 		"--exclude-switches=enable-automation",
 		"--window-size="+strconv.Itoa(loginSessionWidth)+","+strconv.Itoa(loginSessionHeight),
-		"--remote-debugging-address="+loginSessionBrowserAddress,
-		"--remote-debugging-port="+strconv.Itoa(s.DebugPort),
+		"--disable-extensions-except="+s.ExtensionDir,
+		"--load-extension="+s.ExtensionDir,
 		"--user-data-dir="+s.ProfileDir,
 		"--no-sandbox",
 		s.LoginURL,
@@ -301,39 +309,21 @@ func (s *LoginSession) monitor() {
 			s.setError(errors.New("登录会话超时，请重新打开登录窗口。"))
 			return
 		}
-
-		token, cookies, err := readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
-		if err != nil {
-			debugf("login session token poll failed: session=%s err=%v", s.ID, err)
-			time.Sleep(loginSessionPollInterval)
-			continue
-		}
-
-		token = strings.TrimSpace(token)
-		if token == "" {
-			time.Sleep(loginSessionPollInterval)
-			continue
-		}
-
-		if err := persistBearerToken(token); err != nil {
-			s.setError(fmt.Errorf("登录成功但写回 Bearer Token 失败: %w", err))
-			s.setToken(token, cookies)
+		switch s.State() {
+		case LoginSessionSuccess:
+			go func(id string) {
+				time.Sleep(loginSessionCleanupDelay)
+				s.cleanup()
+				if s.manager != nil {
+					s.manager.remove(id)
+				}
+			}(s.ID)
 			return
+		case LoginSessionError, LoginSessionClosed:
+			return
+		default:
+			time.Sleep(loginSessionPollInterval)
 		}
-
-		if err := persistLoginSessionData(s.ID, s.Username, token, cookies); err != nil {
-			log.Printf("login session data persist failed: session=%s err=%v", s.ID, err)
-		}
-
-		s.setSuccess(token, cookies)
-		go func(id string) {
-			time.Sleep(loginSessionCleanupDelay)
-			s.cleanup()
-			if s.manager != nil {
-				s.manager.remove(id)
-			}
-		}(s.ID)
-		return
 	}
 }
 
@@ -355,6 +345,7 @@ func (s *LoginSession) cleanup() {
 		_ = s.xvfbCmd.Process.Kill()
 	}
 	_ = os.RemoveAll(s.ProfileDir)
+	_ = os.RemoveAll(s.ExtensionDir)
 	_ = os.RemoveAll(filepath.Join(os.TempDir(), "truthsocial-runtime-"+s.ID))
 	s.markClosed("登录会话已关闭。")
 }
@@ -426,12 +417,155 @@ func (s *LoginSession) Snapshot() map[string]any {
 		"cookie_count":  len(s.cookies),
 		"cookie_names":  cookieNames(s.cookies),
 		"profile_dir":   s.ProfileDir,
+		"extension_dir": s.ExtensionDir,
 		"chromium_path": s.Chromium,
 	}
 }
 
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
 	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
+}
+
+func (s *LoginSession) ensureCaptureExtension() error {
+	if err := os.MkdirAll(s.ExtensionDir, 0o700); err != nil {
+		return err
+	}
+
+	captureURL := "http://127.0.0.1:8085/truthsocial/login/session/" + url.PathEscape(s.ID) + "/capture"
+	manifest := `{
+  "manifest_version": 3,
+  "name": "Truth Social Login Capture",
+  "version": "1.0.0",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": ["https://truthsocial.com/*", "http://127.0.0.1:8085/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["https://truthsocial.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }]
+}`
+	background := fmt.Sprintf(`importScripts('config.js');
+
+async function getCookies() {
+  return await new Promise((resolve) => {
+    chrome.cookies.getAll({ url: 'https://truthsocial.com/' }, (items) => {
+      const rows = (items || []).map((c) => ({
+        name: c.name || '',
+        value: c.value || '',
+        domain: c.domain || '',
+        path: c.path || '',
+        expires: c.expirationDate || 0,
+        http_only: !!c.httpOnly,
+        secure: !!c.secure,
+        same_site: c.sameSite || '',
+        priority: c.priority || ''
+      }));
+      resolve(rows);
+    });
+  });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'truthsocial-capture' || !msg.token) {
+    return;
+  }
+
+  (async () => {
+    const payload = {
+      session_id: TRUTHSOCIAL_LOGIN_SESSION_ID,
+      username: TRUTHSOCIAL_LOGIN_USERNAME,
+      bearer_token: msg.token,
+      cookies: await getCookies(),
+      page_url: msg.pageUrl || '',
+      captured_at: new Date().toISOString()
+    };
+    const resp = await fetch(TRUTHSOCIAL_LOGIN_CAPTURE_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const text = await resp.text();
+    sendResponse({ ok: resp.ok, status: resp.status, body: text });
+  })().catch((err) => {
+    sendResponse({ ok: false, error: String(err) });
+  });
+  return true;
+});
+`, s.ID)
+	content := fmt.Sprintf(`(() => {
+  const sentKey = 'truthsocial_capture_sent_%s';
+
+  function readToken() {
+    try {
+      const raw = localStorage.getItem('truth:auth');
+      if (!raw) return '';
+      const auth = JSON.parse(raw);
+      const users = auth && auth.users ? auth.users : {};
+      const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+      const first = current || Object.values(users)[0] || null;
+      return first && first.access_token ? first.access_token : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function sendCapture(token) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: 'truthsocial-capture', token: token, pageUrl: location.href },
+        (resp) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (resp && resp.ok) {
+            resolve(resp);
+            return;
+          }
+          reject(new Error((resp && (resp.error || resp.body)) || 'capture failed'));
+        }
+      );
+    });
+  }
+
+  async function tick() {
+    if (sessionStorage.getItem(sentKey) === '1') {
+      return;
+    }
+    const token = readToken();
+    if (!token) {
+      return;
+    }
+    try {
+      await sendCapture(token);
+      sessionStorage.setItem(sentKey, '1');
+    } catch (err) {
+      console.warn('truthsocial login capture failed', err);
+    }
+  }
+
+  tick();
+  setInterval(tick, 1000);
+})();
+`, s.ID)
+	config := fmt.Sprintf(`self.TRUTHSOCIAL_LOGIN_SESSION_ID = %q;
+self.TRUTHSOCIAL_LOGIN_USERNAME = %q;
+self.TRUTHSOCIAL_LOGIN_CAPTURE_URL = %q;
+`, s.ID, s.Username, captureURL)
+
+	files := map[string]string{
+		filepath.Join(s.ExtensionDir, "manifest.json"): manifest,
+		filepath.Join(s.ExtensionDir, "background.js"): background,
+		filepath.Join(s.ExtensionDir, "content.js"):    content,
+		filepath.Join(s.ExtensionDir, "config.js"):     config,
+	}
+	for path, data := range files {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func persistLoginSessionData(sessionID, username, token string, cookies []CapturedCookie) error {

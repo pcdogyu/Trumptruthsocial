@@ -208,6 +208,13 @@ func (a *App) handleTruthSocialLoginSession(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if strings.HasSuffix(suffix, "/capture") {
+		id := strings.TrimSuffix(suffix, "/capture")
+		id = strings.Trim(id, "/")
+		a.handleTruthSocialLoginSessionCapture(w, r, id)
+		return
+	}
+
 	session, ok := a.loginSessions.Get(suffix)
 	if !ok {
 		http.NotFound(w, r)
@@ -252,6 +259,49 @@ func (a *App) handleTruthSocialLoginSessionVNC(w http.ResponseWriter, r *http.Re
 		return
 	}
 	session.VNCWebSocketHandler(w, r)
+}
+
+func (a *App) handleTruthSocialLoginSessionCapture(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	session, ok := a.loginSessions.Get(sessionID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "message": "登录会话不存在或已结束。"})
+		return
+	}
+
+	var payload struct {
+		BearerToken string           `json:"bearer_token"`
+		Cookies     []CapturedCookie `json:"cookies"`
+		PageURL     string           `json:"page_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "捕获数据解析失败。"})
+		return
+	}
+
+	token := strings.TrimSpace(payload.BearerToken)
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "未收到 Bearer Token。"})
+		return
+	}
+
+	if err := persistBearerToken(token); err != nil {
+		log.Printf("truthsocial login capture persist token failed: session=%s err=%v", sessionID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+
+	if err := persistLoginSessionData(session.ID, session.Username, token, payload.Cookies); err != nil {
+		log.Printf("truthsocial login capture persist data failed: session=%s err=%v", sessionID, err)
+	}
+
+	session.setSuccess(token, payload.Cookies)
+	log.Printf("truthsocial login capture received: session=%s cookies=%d", sessionID, len(payload.Cookies))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Bearer Token 已写回后端。"})
 }
 
 func (a *App) handleContent(w http.ResponseWriter, r *http.Request) {
