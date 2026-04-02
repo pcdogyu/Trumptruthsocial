@@ -33,7 +33,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 				},
 			}
 		}
-		return sendTelegramHTMLMessageWithReplyMarkup(cfg, text, replyMarkup)
+		return sendTelegramPlainMessageWithReplyMarkup(cfg, text, replyMarkup)
 	}
 
 	if strings.TrimSpace(post.VideoURL) != "" {
@@ -66,6 +66,14 @@ func sendTelegramHTMLMessage(cfg Config, text string) (bool, string) {
 }
 
 func sendTelegramHTMLMessageWithReplyMarkup(cfg Config, text string, replyMarkup any) (bool, string) {
+	return sendTelegramMessageWithReplyMarkup(cfg, text, "HTML", replyMarkup)
+}
+
+func sendTelegramPlainMessageWithReplyMarkup(cfg Config, text string, replyMarkup any) (bool, string) {
+	return sendTelegramMessageWithReplyMarkup(cfg, text, "", replyMarkup)
+}
+
+func sendTelegramMessageWithReplyMarkup(cfg Config, text, parseMode string, replyMarkup any) (bool, string) {
 	botToken := strings.TrimSpace(cfg.Telegram.BotToken)
 	chatID := strings.TrimSpace(cfg.Telegram.ChatID)
 	if botToken == "" || chatID == "" || strings.Contains(botToken, "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -75,8 +83,10 @@ func sendTelegramHTMLMessageWithReplyMarkup(cfg Config, text string, replyMarkup
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     text,
-		"parse_mode":               "HTML",
 		"disable_web_page_preview": false,
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	if replyMarkup != nil {
 		payload["reply_markup"] = replyMarkup
@@ -178,11 +188,11 @@ func extractYouTubeURL(text string) string {
 
 func buildYouTubeTelegramText(post Post, youtubeURL string) string {
 	title := cleanTelegramContent(post.Content)
-	text := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
+	text := "来自: @" + post.Username + "\n\n"
 	if title != "" {
-		text += html.EscapeString(title) + "\n\n"
+		text += title + "\n\n"
 	}
-	text += html.EscapeString(youtubeURL)
+	text += youtubeURL
 	return text
 }
 
