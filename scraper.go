@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 
 var (
 	openTagRe      = regexp.MustCompile(`(?is)<(article|div)[^>]*data-id=["']([^"']+)["'][^>]*>`)
+	openPostRe     = regexp.MustCompile(`(?is)<(article|div)[^>]*data-testid=["']([^"']*post[^"']*)["'][^>]*>`)
 	timeTagRe      = regexp.MustCompile(`(?is)<time[^>]*datetime=["']([^"']+)["'][^>]*>`)
 	webURLRe       = regexp.MustCompile(`(?is)<a[^>]*class=["'][^"']*status__relative-time[^"']*["'][^>]*href=["']([^"']+)["']`)
+	statusURLRe    = regexp.MustCompile(`(?is)<a[^>]*href=["']([^"']*/status/([^"'/?#]+)[^"']*)["']`)
 	sourceURLRe    = regexp.MustCompile(`(?is)<source[^>]*src=["']([^"']+)["']`)
 	videoSrcRe     = regexp.MustCompile(`(?is)<video[^>]*src=["']([^"']+)["']`)
 	contentBlockRe = regexp.MustCompile(`(?is)class=["'][^"']*status__content[^"']*["'][^>]*>(.*?)</div>`)
@@ -72,30 +75,27 @@ func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
 }
 
 func parsePostsFromHTML(page, username string) []Post {
-	opens := openTagRe.FindAllStringSubmatchIndex(page, -1)
+	opens := mergePostOpenings(page)
 	if len(opens) == 0 {
 		return []Post{}
 	}
 
 	posts := make([]Post, 0, len(opens))
-	for i, match := range opens {
-		idStart := match[4]
-		idEnd := match[5]
-		postID := page[idStart:idEnd]
-		if postID == "" {
-			continue
-		}
-
-		openEnd := match[1]
+	for i, opening := range opens {
+		openEnd := opening.end
 		sliceEnd := len(page)
 		if i+1 < len(opens) {
-			sliceEnd = opens[i+1][0]
+			sliceEnd = opens[i+1].start
 		}
 		if openEnd >= sliceEnd {
 			continue
 		}
 
 		block := removeScriptStyle(page[openEnd:sliceEnd])
+		postID := extractPostID(page, block, opening)
+		if postID == "" {
+			continue
+		}
 
 		timestamp := ""
 		if tm := timeTagRe.FindStringSubmatch(block); len(tm) > 1 {
@@ -104,6 +104,11 @@ func parsePostsFromHTML(page, username string) []Post {
 
 		webURL := ""
 		if wm := webURLRe.FindStringSubmatch(block); len(wm) > 1 {
+			webURL = html.UnescapeString(wm[1])
+			if strings.HasPrefix(webURL, "/") {
+				webURL = "https://truthsocial.com" + webURL
+			}
+		} else if wm := statusURLRe.FindStringSubmatch(block); len(wm) > 2 {
 			webURL = html.UnescapeString(wm[1])
 			if strings.HasPrefix(webURL, "/") {
 				webURL = "https://truthsocial.com" + webURL
@@ -132,6 +137,70 @@ func parsePostsFromHTML(page, username string) []Post {
 	}
 
 	return posts
+}
+
+type postOpening struct {
+	start int
+	end   int
+	match []int
+}
+
+func mergePostOpenings(page string) []postOpening {
+	opens := make([]postOpening, 0)
+	for _, match := range openTagRe.FindAllStringSubmatchIndex(page, -1) {
+		opens = append(opens, postOpening{start: match[0], end: match[1], match: match})
+	}
+	for _, match := range openPostRe.FindAllStringSubmatchIndex(page, -1) {
+		opens = append(opens, postOpening{start: match[0], end: match[1], match: match})
+	}
+	if len(opens) == 0 {
+		return nil
+	}
+	sort.Slice(opens, func(i, j int) bool {
+		if opens[i].start == opens[j].start {
+			return opens[i].end < opens[j].end
+		}
+		return opens[i].start < opens[j].start
+	})
+	dedup := opens[:0]
+	lastStart := -1
+	for _, opening := range opens {
+		if opening.start == lastStart {
+			continue
+		}
+		dedup = append(dedup, opening)
+		lastStart = opening.start
+	}
+	return dedup
+}
+
+func extractPostID(source, block string, opening postOpening) string {
+	match := opening.match
+	if len(match) > 5 {
+		idStart := match[4]
+		idEnd := match[5]
+		if idStart >= 0 && idEnd >= idStart && idEnd <= len(source) {
+			if postID := source[idStart:idEnd]; postID != "" {
+				return postID
+			}
+		}
+	}
+	if len(match) > 3 {
+		testIDStart := match[2]
+		testIDEnd := match[3]
+		if testIDStart >= 0 && testIDEnd >= testIDStart && testIDEnd <= len(source) {
+			testID := source[testIDStart:testIDEnd]
+			if strings.Contains(strings.ToLower(testID), "post") {
+				if wm := statusURLRe.FindStringSubmatch(block); len(wm) > 2 {
+					return wm[2]
+				}
+			}
+		}
+	}
+	if wm := statusURLRe.FindStringSubmatch(block); len(wm) > 2 {
+		return wm[2]
+	}
+	return ""
 }
 
 func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
@@ -173,16 +242,13 @@ func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
 	tasks := []chromedp.Action{
 		chromedp.Navigate(profileURL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(10 * time.Second),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_ = chromedp.WaitVisible(`article[data-id], div[data-id]`, chromedp.ByQuery).Do(ctx)
-			return nil
+			return waitForRenderablePosts(ctx, 60*time.Second)
 		}),
 		chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
 		chromedp.Sleep(2 * time.Second),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_ = chromedp.Evaluate(`document.querySelectorAll('.status__content__read-more-button, button.read-more-button').forEach(function(btn){ if (btn.offsetParent !== null) btn.click(); });`, nil).Do(ctx)
-			return nil
+			return chromedp.Evaluate(`document.querySelectorAll('.status__content__read-more-button, button.read-more-button').forEach(function(btn){ if (btn.offsetParent !== null) btn.click(); });`, nil).Do(ctx)
 		}),
 		chromedp.Sleep(1 * time.Second),
 		chromedp.OuterHTML("html", &page, chromedp.ByQuery),
@@ -192,6 +258,25 @@ func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
 		return "", err
 	}
 	return page, nil
+}
+
+func waitForRenderablePosts(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	selectorExpr := `document.querySelectorAll("article[data-id], div[data-id], article[data-testid='post'], div[data-testid='post'], div.status[data-id]").length`
+	for {
+		var count int64
+		if err := chromedp.Evaluate(selectorExpr, &count).Do(ctx); err == nil && count > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for Truth Social posts to render")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func fetchPageHTMLWithHTTP(profileURL string, cfg Config) (string, error) {
