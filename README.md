@@ -48,12 +48,6 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
         *   `telegram`: Telegram `bot_token` and `chat_id` are now configured via the "消息推送" (Message Push) page in the Web UI.
         *   `auth.truthsocial_username`: Your username on Truth Social (e.g., `pcdogyuhao`).
         *   `ai_analysis`: AI settings are now configured via the "AI 配置" (AI Config) page in the Web UI.
-        *   You can leave `accounts_to_monitor` empty and add them via the Web UI.
-
-### Usage
-
-1.  **Run the application:**
-    ```bash
     python main.py
     ```
 
@@ -117,17 +111,11 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
         *   `auth`: 粘贴你获取到的 `bearer_token`。
         *   `telegram`: Telegram 的 `bot_token` 和 `chat_id` 现在通过 Web UI 中的“消息推送”页面进行配置。
         *   `auth.truthsocial_username`: 您在 Truth Social 上的用户名（例如 `pcdogyuhao`）。
-        *   `ai_analysis`: AI 设置现在通过 Web UI 中的“AI 配置”页面进行配置。
-        *   `accounts_to_monitor` 列表可以先留空，稍后通过 Web UI 添加。
-
-### 运行程序
+        *   `ai_analysis`: AI 设置现在通过 Web UI 中的“AI 配置”页面进行配置。 
+        *   `accounts_to_monitor`: 要监控的完整个人主页 URL 列表（例如 `https://truthsocial.com/@realDonaldTrump`）。此列表可以先留空，稍后通过 Web UI 添加。
 
 1.  **启动主程序:**
-    ```bash
-    python main.py
     ```
-
-2.  脚本会在后台启动监控线程，并开启 Web UI 服务。
 
 3.  **访问 Web UI:** 打开浏览器并访问 `http://127.0.0.1:8085`。
 

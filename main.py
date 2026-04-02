@@ -8,7 +8,7 @@ import os
 import threading
 
 # 导入您编写的监视器类
-from monitor import TruthSocialMonitor
+from monitor import TruthSocialMonitor # monitor 模块内部也需要更新为 config_manager
 import database # 导入数据库模块
 from app import app, create_templates_if_not_exists # 导入 Flask app 和模板创建函数
 
@@ -16,20 +16,8 @@ from app import app, create_templates_if_not_exists # 导入 Flask app 和模板
 CONFIG_FILE = 'config.yaml'
 
 # --- 日志配置 ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def load_config(path=CONFIG_FILE):
-    """加载 YAML 配置文件"""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        logging.error(f"错误：配置文件 '{path}' 未找到。")
-        logging.error("请确保您已将 'config.yaml.example' 复制为 'config.yaml' 并填入您的配置。")
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        logging.error(f"错误：解析配置文件 '{path}' 时出错: {e}")
-        sys.exit(1)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s') # 保持日志配置
+import config_manager # 导入新的配置管理器
 
 def parse_duration(interval_str):
     """将 '5m', '1h' 这样的字符串解析为秒数"""
@@ -105,10 +93,10 @@ def send_telegram_message(bot_token, chat_id, text):
 def monitor_worker():
     """后台监控工作线程"""
     logging.info("正在启动 TruthSocial 监视器...")
-
-    config = load_config()
     
-    if not config.get('telegram', {}).get('bot_token') or not config.get('telegram', {}).get('chat_id') or config.get('telegram', {}).get('bot_token') == "YOUR_TELEGRAM_BOT_TOKEN":
+    initial_config = config_manager.load_config()
+    
+    if not initial_config.get('telegram', {}).get('bot_token') or not initial_config.get('telegram', {}).get('chat_id') or initial_config.get('telegram', {}).get('bot_token') == "YOUR_TELEGRAM_BOT_TOKEN":
         logging.error("错误：Telegram 的 'bot_token' 或 'chat_id' 未在 config.yaml 中正确配置。")
         sys.exit(1)
 
@@ -119,39 +107,54 @@ def monitor_worker():
     try:
         while True:
             logging.info("--- 开始新的监控周期 ---")
-            # 每次循环重新加载配置，以便动态更新监控列表和 Telegram 设置
-            current_config = load_config()
+            # 每次循环重新加载配置，以便动态更新监控列表和 Telegram 设置 (例如通过 Web UI 修改后)
+            current_config = config_manager.load_config()
             bot_token = current_config.get('telegram', {}).get('bot_token')
             chat_id = current_config.get('telegram', {}).get('chat_id')
 
-            accounts_to_monitor = current_config.get('accounts_to_monitor', [])
+            accounts_to_monitor = current_config.get('accounts_to_monitor', []) # 现在这里是URL列表
+
+            # 增加对 accounts_to_monitor 类型的检查，防止配置错误
+            if not isinstance(accounts_to_monitor, list):
+                logging.error("配置错误: 'accounts_to_monitor' 在 config.yaml 中必须是一个列表 (list)，即使只有一个URL。")
+                logging.error("请检查您的 config.yaml 文件，确保格式正确，例如:\naccounts_to_monitor:\n  - https://truthsocial.com/@realDonaldTrump")
+                time.sleep(interval_seconds) # 等待下一个周期，给用户时间修复配置
+                continue
+
             if not accounts_to_monitor:
-                logging.warning("监控列表为空。请通过 Web UI 添加账户或在 config.yaml 中配置。")
+                logging.warning("监控列表为空。请在 config.yaml 中配置要监控的URL。")
 
-            new_posts_found = []
-            for username in accounts_to_monitor:
-                posts = monitor.fetch_latest_posts(username)
+            # 抓取所有监控账户的帖子，并使用 INSERT OR IGNORE 存入数据库
+            for profile_url in accounts_to_monitor:
+                if not isinstance(profile_url, str) or not profile_url.startswith('http'):
+                    logging.error(f"配置错误: 监控列表中的条目 '{profile_url}' 不是一个有效的URL。请确保所有条目都是完整的URL，例如 'https://truthsocial.com/@username'。跳过此条目。")
+                    continue
+                posts = monitor.fetch_latest_posts(profile_url)
                 for post in posts:
-                    # 使用数据库检查帖子是否为新
-                    if post.get('id') and not database.is_post_seen(post['id']):
-                        logging.info(f"发现新帖子! 用户: {username}, ID: {post['id']}")
-                        new_posts_found.append(post)
+                    if post.get('id'):
+                        database.add_post(post) # 新帖子会被添加，旧帖子会被忽略
             
-            if new_posts_found:
-                sorted_new_posts = sorted(new_posts_found, key=lambda p: p.get('id', ''), reverse=True)
-                for post in sorted_new_posts:
-                    # 将新帖子存入数据库
-                    database.add_post(post)
-
+            # 2. 从数据库获取所有未发送的帖子并进行推送
+            unsent_posts = database.get_unsent_posts()
+            if unsent_posts:
+                # 按时间顺序推送，先抓取到的先推送
+                sorted_unsent_posts = sorted(unsent_posts, key=lambda p: p.get('timestamp') or '')
+                for post in sorted_unsent_posts:
+                    logging.info(f"发现未推送的帖子! 用户: {post['username']}, ID: {post['id']}")
+                    
+                    success = False
                     # 检查帖子是否包含视频
                     if post.get('video_url'):
                         # 视频帖子
                         caption = f"<b>{post['username']} 发布了新视频:</b>\n\n{post['content']}\n\n<a href='{post['web_url']}'>查看原文</a>"
-                        send_telegram_video(bot_token, chat_id, post['video_url'], caption)
+                        success = send_telegram_video(bot_token, chat_id, post['video_url'], caption)
                     else:
                         # 普通文本帖子
                         message = f"<b>{post['username']} 发布了新内容:</b>\n\n{post['content']}\n\n<a href='{post['web_url']}'>查看原文</a>"
-                        send_telegram_message(bot_token, chat_id, message)
+                        success = send_telegram_message(bot_token, chat_id, message)
+
+                    if success:
+                        database.mark_post_as_sent(post['id'])
 
                     time.sleep(1) # 短暂延时，防止消息发送过快
             else:

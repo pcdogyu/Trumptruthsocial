@@ -14,12 +14,13 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+import config_manager # 导入新的配置管理器
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-CONFIG_FILE = 'config.yaml'
 STATE_FILE = 'state.json' # 暂时不实现状态保存，但保留字段
+
 
 class TruthSocialMonitor:
     def __init__(self, config):
@@ -109,14 +110,21 @@ class TruthSocialMonitor:
         # 这确保了没有明确时间戳的帖子被视为最新，不会过早停止滚动。
         return datetime.now(timezone.utc)
 
-    def fetch_latest_posts(self, username):
+    def fetch_latest_posts(self, profile_url):
         """
         使用 Selenium 抓取用户主页上可见的最新帖子。
         Truth Social 是动态渲染页面，且有 Cloudflare 保护，requests 容易失效。
         """
-        profile_url = f"https://truthsocial.com/@{username}"
         logging.info(f"Fetching latest posts (Selenium) from: {profile_url}")
         
+        # 从URL中提取用户名，用于数据结构和日志记录
+        try:
+            # 移除末尾斜杠，按'/'分割，取最后一部分，再移除'@'前缀
+            username = profile_url.rstrip('/').split('/')[-1].lstrip('@')
+        except Exception:
+            logging.error(f"无法从 URL '{profile_url}' 中提取用户名。")
+            username = "unknown"
+
         driver = self._init_selenium_driver()
         if not driver:
             return []
@@ -214,7 +222,7 @@ class TruthSocialMonitor:
         finally:
             driver.quit() # 确保执行完毕后关闭浏览器释放内存
 
-    def fetch_historical_posts_selenium(self, username, days_to_sync=7, max_scrolls=50, max_posts_per_user=500):
+    def fetch_historical_posts_selenium(self, profile_url, days_to_sync=7, max_scrolls=50, max_posts_per_user=500):
         """
         使用 Selenium 抓取指定用户在过去 N 天内的历史帖子。
         通过模拟滚动加载更多内容。
@@ -222,8 +230,14 @@ class TruthSocialMonitor:
         driver = self._init_selenium_driver()
         if not driver:
             return []
+        
+        # 从URL中提取用户名
+        try:
+            username = profile_url.rstrip('/').split('/')[-1].lstrip('@')
+        except Exception:
+            logging.error(f"无法从 URL '{profile_url}' 中提取用户名。")
+            username = "unknown"
 
-        profile_url = f"https://truthsocial.com/@{username}"
         logging.info(f"Fetching historical posts (Selenium) for @{username} from: {profile_url} (last {days_to_sync} days)")
         
         driver.get(profile_url)
@@ -339,26 +353,28 @@ class TruthSocialMonitor:
 
     def run_cycle(self):
         logging.info("--- Starting new monitoring cycle ---")
-        for username in self.config['accounts_to_monitor']:
-            posts = self.fetch_latest_posts(username)
+        for profile_url in self.config['accounts_to_monitor']:
+            posts = self.fetch_latest_posts(profile_url)
             if posts:
-                logging.info(f"Processing {len(posts)} posts for {username}...")
+                # 从返回的帖子数据中获取用户名
+                username_from_post = posts[0].get('username', 'unknown') if posts else 'unknown'
+                logging.info(f"Processing {len(posts)} posts for {username_from_post}...")
                 for post in posts:
                     logging.info(f"  Post ID: {post['id']}, Content: {post['content'][:50]}...")
                     # 这里可以添加翻译、AI分析、发送Telegram消息等逻辑
             else:
-                logging.info(f"No posts to process for {username}.")
+                # 如果没有帖子，从URL中提取用户名用于日志
+                username_from_url = profile_url.rstrip('/').split('/')[-1].lstrip('@')
+                logging.info(f"No posts to process for {username_from_url}.")
         logging.info("--- Monitoring cycle finished ---")
 
 def load_config(file_path):
-    if not os.path.exists(file_path):
-        logging.error(f"Config file '{file_path}' not found. Please create it.")
-        return None
-    with open(file_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    # 这里的 load_config 应该使用 config_manager
+    return config_manager.load_config()
 
 if __name__ == "__main__":
-    config = load_config(CONFIG_FILE)
+    # 在 monitor.py 独立运行时，也使用 config_manager
+    config = config_manager.load_config()
     if not config:
         exit(1)
 

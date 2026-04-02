@@ -19,7 +19,8 @@ def init_db():
             web_url TEXT,
             video_url TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            raw_data TEXT
+            raw_data TEXT,
+            sent_to_telegram INTEGER NOT NULL DEFAULT 0
         )
     ''')
     conn.commit()
@@ -36,6 +37,11 @@ def init_db():
         logging.info("检测到 'posts' 表缺少 'raw_data' 列，正在添加...")
         cursor.execute('ALTER TABLE posts ADD COLUMN raw_data TEXT')
         logging.info("'raw_data' 列已成功添加。")
+
+    if 'sent_to_telegram' not in columns:
+        logging.info("检测到 'posts' 表缺少 'sent_to_telegram' 列，正在添加...")
+        cursor.execute('ALTER TABLE posts ADD COLUMN sent_to_telegram INTEGER NOT NULL DEFAULT 0')
+        logging.info("'sent_to_telegram' 列已成功添加。")
 
     conn.close()
     logging.info("数据库初始化完成。")
@@ -134,6 +140,38 @@ def is_post_seen(post_id):
     result = cursor.fetchone()
     conn.close()
     return result is not None
+
+def mark_post_as_sent(post_id):
+    """将帖子在数据库中标记为已发送到Telegram。"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('UPDATE posts SET sent_to_telegram = 1 WHERE id = ?', (post_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            logging.info(f"帖子 {post_id} 已标记为已发送。")
+            return True
+        return False
+    except sqlite3.Error as e:
+        logging.error(f"标记帖子 {post_id} 为已发送时出错: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_unsent_posts():
+    """获取所有尚未发送到Telegram的帖子。"""
+    conn = sqlite3.connect(DATABASE_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT * FROM posts WHERE sent_to_telegram = 0 ORDER BY timestamp ASC')
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    except sqlite3.Error as e:
+        logging.error(f"获取未发送帖子时出错: {e}")
+        return []
+    finally:
+        conn.close()
 
 def get_all_posts(username=None, limit=100, offset=0):
     """从数据库获取所有帖子，可按用户名过滤"""
