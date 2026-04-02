@@ -7,6 +7,12 @@ LOG_FILE="$ROOT_DIR/upgrade.log"
 exec >>"$LOG_FILE" 2>&1
 
 export PATH="/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export HOME="${HOME:-/root}"
+export GOPATH="${GOPATH:-$HOME/go}"
+export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
+export GOCACHE="${GOCACHE:-$ROOT_DIR/.gocache}"
+
+mkdir -p "$GOPATH" "$GOMODCACHE" "$GOCACHE"
 
 echo "[$(date -Iseconds)] upgrade started"
 cd "$ROOT_DIR"
