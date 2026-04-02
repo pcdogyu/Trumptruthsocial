@@ -33,6 +33,7 @@ func main() {
 		}()
 	}
 	log.Println("logging initialized")
+	debugf("logging target configured: console=%t file=%t debug=%t", true, err == nil, debugEnabled)
 
 	if err := ensureFiles(); err != nil {
 		log.Fatalf("failed to initialize config: %v", err)

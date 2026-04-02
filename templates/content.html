@@ -14,6 +14,7 @@
         .post-card .card-body { padding: 15px; }
         .post-card .card-footer { background-color: #f8f9fa; font-size: 0.85em; color: #6c757d; }
         .post-card .card-text { white-space: pre-wrap; word-wrap: break-word; }
+        .post-image { max-width: 100%; height: auto; display: block; margin-top: 10px; border-radius: 6px; }
         .video-container { position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; background: #000; margin-top: 10px; }
         .video-container iframe, .video-container video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         .page-shell { flex-grow: 1; }
@@ -65,13 +66,13 @@
     <div class="mb-3">
         <div id="sync-message-area" class="mb-2"></div>
         <div class="sync-actions">
-            <button id="syncLatestButton" class="btn btn-primary">同步最新一条</button>
+            <button id="syncLatestButton" class="btn btn-primary">同步各账号最新一条</button>
             <button id="sync3DaysButton" class="btn btn-info">同步最近3天内容</button>
             <button id="syncHistoricalButton" class="btn btn-info">同步最近7天内容</button>
             <button id="sync14DaysButton" class="btn btn-info">同步最近2周内容</button>
             <button id="sync30DaysButton" class="btn btn-info">同步最近30天内容</button>
         </div>
-        <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近的帖子。</small>
+        <small class="form-text text-muted">“同步各账号最新一条”会为每个监控账户抓取一条最新帖子，并只转发本次同步到的帖子。</small>
     </div>
 
     <div class="row">
@@ -119,6 +120,11 @@
                     </div>
                     <div class="card-body">
                         <p class="card-text">{{.Content}}</p>
+                        {{if .ImageURL}}
+                        <a href="{{.ImageURL}}" target="_blank">
+                            <img src="{{.ImageURL}}" alt="post image" class="post-image">
+                        </a>
+                        {{end}}
                         {{if .VideoURL}}
                         <div class="video-container">
                             <video controls preload="metadata" style="width: 100%; height: auto;">
@@ -285,9 +291,7 @@
                 type: 'POST',
                 success: function(response) {
                     displaySyncMessage(response.message, response.status);
-                    if (response.new_posts > 0) {
-                        setTimeout(function() { location.reload(); }, 1500);
-                    }
+                    setTimeout(function() { location.reload(); }, 1500);
                 },
                 error: function(xhr) {
                     var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "同步最新帖子失败。";

@@ -247,6 +247,7 @@ func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "帖子未找到。"})
 		return
 	}
+	debugf("HTTP forward request: post_id=%s username=@%s image=%t video=%t", post.ID, post.Username, strings.TrimSpace(post.ImageURL) != "", strings.TrimSpace(post.VideoURL) != "")
 	if post.Status == PostStatusBlocked {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "该帖子已被屏蔽，不能转发。"})
 		return
@@ -280,6 +281,7 @@ func (a *App) handleSyncContent(w http.ResponseWriter, r *http.Request) {
 	}
 	var req SyncRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	debugf("HTTP sync content request: days=%d", req.Days)
 	added, err := syncAllAccounts(a.store, req.Days)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, SyncResponse{Status: "error", Message: err.Error()})
@@ -294,6 +296,7 @@ func (a *App) handleSyncLatestPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	debugf("HTTP sync latest request received")
 	added, err := syncLatestAccounts(a.store)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, SyncResponse{Status: "error", Message: err.Error()})

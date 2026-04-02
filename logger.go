@@ -4,11 +4,15 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+var debugEnabled = isDebugLoggingEnabled()
 
 type DailyRotatingWriter struct {
 	mu          sync.Mutex
@@ -99,6 +103,24 @@ func (w *DailyRotatingWriter) Close() error {
 
 func archiveName(date string) string {
 	return fmt.Sprintf("go-%s.log.gz", date)
+}
+
+func isDebugLoggingEnabled() bool {
+	for _, key := range []string{"DEBUG", "DEBUG_LOG", "LOG_LEVEL"} {
+		value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+		switch value {
+		case "1", "true", "yes", "on", "debug":
+			return true
+		}
+	}
+	return false
+}
+
+func debugf(format string, args ...any) {
+	if !debugEnabled {
+		return
+	}
+	log.Printf("[DEBUG] "+format, args...)
 }
 
 func rotateToArchive(srcPath, dstPath string) error {
