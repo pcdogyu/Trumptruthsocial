@@ -320,7 +320,7 @@ func fetchPostsViaBrowserAPI(profileURL string, cfg Config, limit int) ([]Post, 
 	var lastErr error
 	for _, userDataDir := range candidates {
 		posts, err := fetchPostsViaBrowserAPIWithProfile(profileURL, cfg, limit, userDataDir)
-		if err == nil && len(posts) > 0 {
+		if err == nil {
 			return posts, nil
 		}
 		if err != nil {
@@ -365,14 +365,23 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 		return nil, err
 	}
 
-	token := strings.TrimSpace(authToken)
-	if token == "" {
-		token = strings.TrimSpace(cfg.Auth.BearerToken)
-	}
-	if token == "" || strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN") {
+	tokens := bearerTokenCandidates(cfg, authToken)
+	if len(tokens) == 0 {
 		return nil, fmt.Errorf("no Truth Social access token available")
 	}
 
+	var lastErr error
+	for _, token := range tokens {
+		posts, err := fetchPostsViaBrowserAPIWithToken(ctx, account, token, limit)
+		if err == nil {
+			return posts, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func fetchPostsViaBrowserAPIWithToken(ctx context.Context, account, token string, limit int) ([]Post, error) {
 	var raw string
 	js := fmt.Sprintf(`(async () => {
 		const acct = %s;
@@ -410,7 +419,7 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 		return nil, err
 	}
 	if len(payload.Statuses) == 0 {
-		return nil, fmt.Errorf("no statuses returned by API")
+		return []Post{}, nil
 	}
 
 	posts := make([]Post, 0, len(payload.Statuses))
@@ -571,6 +580,23 @@ func selectVideoURL(media []mastodonMediaAttachment) string {
 }
 
 func fetchPageHTMLWithHTTP(profileURL string, cfg Config) (string, error) {
+	candidates := bearerTokenCandidates(cfg, "")
+	if len(candidates) == 0 {
+		candidates = []string{""}
+	}
+
+	var lastErr error
+	for _, token := range candidates {
+		page, err := fetchPageHTMLWithHTTPToken(profileURL, token)
+		if err == nil {
+			return page, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+func fetchPageHTMLWithHTTPToken(profileURL, token string) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, profileURL, nil)
 	if err != nil {
@@ -578,7 +604,8 @@ func fetchPageHTMLWithHTTP(profileURL string, cfg Config) (string, error) {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
-	if token := strings.TrimSpace(cfg.Auth.BearerToken); token != "" && !strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN") {
+	token = strings.TrimSpace(token)
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

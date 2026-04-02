@@ -40,7 +40,12 @@
         <div class="form-group">
             <label for="bearer_token">Bearer Token:</label>
             <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{.BearerTokenValue}}">
-            <small class="form-text text-muted">运行 `python get_token.py` 后，登录成功会自动写回 `config.yaml`。</small>
+            <small class="form-text text-muted">运行 `python get_token.py` 后，登录成功会自动写回 `config.yaml`。系统会保留最近 3 个 Token。</small>
+        </div>
+        <div class="form-group">
+            <label for="bearer_token_validity_days">Bearer Token 有效期（天）:</label>
+            <input type="number" class="form-control" id="bearer_token_validity_days" name="bearer_token_validity_days" min="1" value="{{.Config.Auth.BearerTokenValidityDays}}">
+            <small class="form-text text-muted">默认 5 天。超过有效期后，启动时会自动打开浏览器获取新 Token。</small>
         </div>
         <div class="form-group">
             <label for="truthsocial_username">Truth Social 用户名:</label>

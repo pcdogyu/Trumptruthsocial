@@ -9,6 +9,10 @@ accounts_to_monitor:
 # 如果您有 Bearer Token，可以填入这里以进行认证抓取
 auth:
   bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN" # 从 get_token.py 获取
+  bearer_token_backup_1: ""
+  bearer_token_backup_2: ""
+  bearer_token_updated_at: ""
+  bearer_token_validity_days: 5
   truthsocial_username: "YOUR_TRUTHSOCIAL_USERNAME" # 您在 Truth Social 的用户名
 
 # Telegram 通知设置

@@ -25,6 +25,8 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **Configurable Web Selectors**: CSS selectors used for scraping can now be configured in `config.yaml`, making the tool more resilient to website structure changes.
 *   **Authenticated Fetching**: Uses a Bearer Token to access content that may require authentication.
 *   **Token Helper**: Includes a script (`get_token.py`) that opens a browser, waits for login, and writes the Bearer Token back to `config.yaml`.
+*   **Token Rotation**: Keeps the current Bearer Token plus the previous two tokens, and automatically refreshes the token after the configured validity window.
+*   **One-Click Start**: Windows users can double-click `start.bat`; it refreshes the token if needed and then starts the app.
 *   **Content Viewer**: A dedicated Web UI page to browse historical posts from monitored accounts.
 *   **Historical Sync**: A button in the Web UI to trigger a manual synchronization of recent (e.g., last 7 days) posts for all monitored accounts, using a more robust Selenium-based scraping method to fetch dynamically loaded content.
 *   **Post History**: Stores a history of all fetched posts in a local SQLite database.
@@ -55,9 +57,11 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **Get Bearer Token**: Run `python get_token.py`. This will open a Chrome browser. Log in to Truth Social manually if needed. After login, the script will automatically extract the token and write it back to `config.yaml`.
     *   **Fill `config.yaml`** (or use the Web UI later):
         *   `auth`: Paste the `bearer_token` you obtained.
+        *   `auth.bearer_token_validity_days`: Controls how many days a token is considered valid before startup refreshes it automatically. Default is 5.
         *   `telegram`: Telegram `bot_token` and `chat_id` are now configured via the "消息推送" (Message Push) page in the Web UI.
         *   `auth.truthsocial_username`: Your username on Truth Social (e.g., `pcdogyuhao`).
         *   `ai_analysis`: AI settings are now configured via the "AI 配置" (AI Config) page in the Web UI.
+    *   **One-Click Launch**: Double-click `start.bat` on Windows to refresh the token if needed and start the service.
     python main.py
     ```
 
@@ -89,6 +93,8 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **可配置的网页选择器**: 用于网页抓取的 CSS 选择器现在可以在 `config.yaml` 中配置，使工具更能适应网站结构的变化。
 *   **认证抓取**: 使用 Bearer Token 获取需要登录才能查看的内容。
 *   **Token 获取助手**: 包含一个辅助脚本 (`get_token.py`)，会在您登录后自动从浏览器中提取 Bearer Token，并写回 `config.yaml`。
+*   **Token 轮换**: 自动保留当前 Token 和前两个备用 Token，并在配置的有效期到达后刷新。
+*   **一键启动**: Windows 下双击 `start.bat` 即可在启动前自动检查并刷新 Token，然后启动服务。
 *   **内容查看器**: 一个专门的 Web UI 页面，用于浏览监控账户的历史帖子。
 *   **历史同步**: Web UI 中增加一个按钮，可以手动触发所有监控账户最近（例如，最近7天）帖子的同步。此功能现在使用更健壮的基于 Selenium 的抓取方法，能够获取动态加载的历史内容。
 *   **历史记录**: 将所有抓取到的帖子历史记录保存在本地 SQLite 数据库中。
@@ -119,10 +125,12 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
     *   **获取 Bearer Token**: 运行 `python get_token.py`。脚本会打开一个 Chrome 浏览器，请手动登录 Truth Social。登录成功后，脚本会自动提取 Token，并写回 `config.yaml`。
     *   **填写 `config.yaml`** (或稍后通过 Web UI 配置):
         *   `auth`: 粘贴你获取到的 `bearer_token`。
+        *   `auth.bearer_token_validity_days`: Token 有效期（天），超过后启动时会自动刷新。默认值为 5。
         *   `telegram`: Telegram 的 `bot_token` 和 `chat_id` 现在通过 Web UI 中的“消息推送”页面进行配置。
         *   `auth.truthsocial_username`: 您在 Truth Social 上的用户名（例如 `pcdogyuhao`）。
         *   `ai_analysis`: AI 设置现在通过 Web UI 中的“AI 配置”页面进行配置。 
         *   `accounts_to_monitor`: 要监控的完整个人主页 URL 列表（例如 `https://truthsocial.com/@realDonaldTrump`）。此列表可以先留空，稍后通过 Web UI 添加。
+    *   **一键启动**: 在 Windows 上双击 `start.bat`，即可在启动前自动检查并刷新 Token，再启动服务。
 
 1.  **启动主程序:**
     ```

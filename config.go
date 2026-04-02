@@ -6,9 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const configFileName = "config.yaml"
+const defaultBearerTokenValidityDays = 5
 
 var configMu sync.Mutex
 
@@ -16,8 +18,9 @@ func defaultConfig() Config {
 	return Config{
 		AccountsToMonitor: []string{},
 		Auth: AuthConfig{
-			BearerToken:         "YOUR_TRUTHSOCIAL_BEARER_TOKEN",
-			TruthSocialUsername: "YOUR_TRUTHSOCIAL_USERNAME",
+			BearerToken:             "YOUR_TRUTHSOCIAL_BEARER_TOKEN",
+			BearerTokenValidityDays: defaultBearerTokenValidityDays,
+			TruthSocialUsername:     "YOUR_TRUTHSOCIAL_USERNAME",
 		},
 		Telegram: TelegramConfig{
 			BotToken: "YOUR_TELEGRAM_BOT_TOKEN",
@@ -141,6 +144,18 @@ func SaveConfig(cfg Config) error {
 	b.WriteString("  bearer_token: ")
 	b.WriteString(quoteIfNeeded(cfg.Auth.BearerToken))
 	b.WriteString("\n")
+	b.WriteString("  bearer_token_backup_1: ")
+	b.WriteString(quoteIfNeeded(cfg.Auth.BearerTokenBackup1))
+	b.WriteString("\n")
+	b.WriteString("  bearer_token_backup_2: ")
+	b.WriteString(quoteIfNeeded(cfg.Auth.BearerTokenBackup2))
+	b.WriteString("\n")
+	b.WriteString("  bearer_token_updated_at: ")
+	b.WriteString(quoteIfNeeded(cfg.Auth.BearerTokenUpdatedAt))
+	b.WriteString("\n")
+	b.WriteString("  bearer_token_validity_days: ")
+	b.WriteString(strconv.Itoa(validBearerTokenValidityDays(cfg.Auth.BearerTokenValidityDays)))
+	b.WriteString("\n")
 	b.WriteString("  truthsocial_username: ")
 	b.WriteString(quoteIfNeeded(cfg.Auth.TruthSocialUsername))
 	b.WriteString("\n\n")
@@ -213,6 +228,16 @@ func applySectionValue(cfg *Config, section, key, value string) {
 		switch key {
 		case "bearer_token":
 			cfg.Auth.BearerToken = unquote(value)
+		case "bearer_token_backup_1":
+			cfg.Auth.BearerTokenBackup1 = unquote(value)
+		case "bearer_token_backup_2":
+			cfg.Auth.BearerTokenBackup2 = unquote(value)
+		case "bearer_token_updated_at":
+			cfg.Auth.BearerTokenUpdatedAt = unquote(value)
+		case "bearer_token_validity_days":
+			if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+				cfg.Auth.BearerTokenValidityDays = n
+			}
 		case "truthsocial_username":
 			cfg.Auth.TruthSocialUsername = unquote(value)
 		}
@@ -299,4 +324,109 @@ func quoteIfNeeded(value string) string {
 		return strconv.Quote(value)
 	}
 	return value
+}
+
+func validBearerTokenValidityDays(value int) int {
+	if value <= 0 {
+		return defaultBearerTokenValidityDays
+	}
+	return value
+}
+
+func bearerTokenPlaceholder(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return true
+	}
+	return strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN")
+}
+
+func bearerTokenCandidates(cfg Config, preferred string) []string {
+	items := []string{
+		strings.TrimSpace(preferred),
+		strings.TrimSpace(cfg.Auth.BearerToken),
+		strings.TrimSpace(cfg.Auth.BearerTokenBackup1),
+		strings.TrimSpace(cfg.Auth.BearerTokenBackup2),
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if bearerTokenPlaceholder(item) {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+func bearerTokenNeedsRefresh(cfg Config, now time.Time) bool {
+	token := strings.TrimSpace(cfg.Auth.BearerToken)
+	if bearerTokenPlaceholder(token) {
+		return true
+	}
+	updatedAt := strings.TrimSpace(cfg.Auth.BearerTokenUpdatedAt)
+	if updatedAt == "" {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339, updatedAt)
+	if err != nil {
+		return false
+	}
+	validityDays := validBearerTokenValidityDays(cfg.Auth.BearerTokenValidityDays)
+	if validityDays <= 0 {
+		return false
+	}
+	expiry := parsed.Add(time.Duration(validityDays) * 24 * time.Hour)
+	return !now.Before(expiry)
+}
+
+func rotateBearerTokens(cfg *Config, newToken string) {
+	newToken = strings.TrimSpace(newToken)
+	if newToken == "" {
+		cfg.Auth.BearerToken = ""
+		cfg.Auth.BearerTokenBackup1 = ""
+		cfg.Auth.BearerTokenBackup2 = ""
+		cfg.Auth.BearerTokenUpdatedAt = ""
+		return
+	}
+
+	items := []string{
+		newToken,
+		strings.TrimSpace(cfg.Auth.BearerToken),
+		strings.TrimSpace(cfg.Auth.BearerTokenBackup1),
+		strings.TrimSpace(cfg.Auth.BearerTokenBackup2),
+	}
+	seen := map[string]struct{}{}
+	rotated := make([]string, 0, 3)
+	for _, item := range items {
+		if bearerTokenPlaceholder(item) {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		rotated = append(rotated, item)
+		if len(rotated) == 3 {
+			break
+		}
+	}
+
+	cfg.Auth.BearerToken = ""
+	cfg.Auth.BearerTokenBackup1 = ""
+	cfg.Auth.BearerTokenBackup2 = ""
+	if len(rotated) > 0 {
+		cfg.Auth.BearerToken = rotated[0]
+	}
+	if len(rotated) > 1 {
+		cfg.Auth.BearerTokenBackup1 = rotated[1]
+	}
+	if len(rotated) > 2 {
+		cfg.Auth.BearerTokenBackup2 = rotated[2]
+	}
+	cfg.Auth.BearerTokenUpdatedAt = time.Now().UTC().Format(time.RFC3339)
 }

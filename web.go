@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -117,8 +118,11 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 			bearerToken = cfg.Auth.BearerToken
 		}
 	}
-	cfg.Auth.BearerToken = bearerToken
+	rotateBearerTokens(&cfg, bearerToken)
 	cfg.Auth.TruthSocialUsername = strings.TrimSpace(r.FormValue("truthsocial_username"))
+	if validityDays, err := strconv.Atoi(strings.TrimSpace(r.FormValue("bearer_token_validity_days"))); err == nil {
+		cfg.Auth.BearerTokenValidityDays = validityDays
+	}
 	cfg.RefreshInterval = strings.TrimSpace(r.FormValue("refresh_interval"))
 	cfg.AccountsToMonitor = splitLines(r.FormValue("accounts_to_monitor"))
 	if cfg.RefreshInterval == "" {
@@ -455,7 +459,7 @@ func maskSecret(value string) string {
 	if len(value) <= 8 {
 		return value
 	}
-	return value[:4] + "****" + value[len(value)-4:]
+	return value[:4] + strings.Repeat("*", 10) + value[len(value)-4:]
 }
 
 func getGitCommitInfo() GitInfo {

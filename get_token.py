@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -62,7 +63,28 @@ def mask_token(token: str) -> str:
 def save_token_to_config(token: str) -> None:
     config = config_manager.load_config()
     auth = config.setdefault("auth", {})
-    auth["bearer_token"] = token
+    existing = [
+        token.strip(),
+        str(auth.get("bearer_token", "")).strip(),
+        str(auth.get("bearer_token_backup_1", "")).strip(),
+        str(auth.get("bearer_token_backup_2", "")).strip(),
+    ]
+    rotated = []
+    seen = set()
+    for item in existing:
+        if not item or "YOUR_TRUTHSOCIAL_BEARER_TOKEN" in item:
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        rotated.append(item)
+        if len(rotated) == 3:
+            break
+
+    auth["bearer_token"] = rotated[0] if len(rotated) > 0 else ""
+    auth["bearer_token_backup_1"] = rotated[1] if len(rotated) > 1 else ""
+    auth["bearer_token_backup_2"] = rotated[2] if len(rotated) > 2 else ""
+    auth["bearer_token_updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     config_manager.save_config(config)
     logging.info("Bearer Token 已写回 config.yaml")
 

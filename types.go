@@ -3,8 +3,12 @@ package main
 import "time"
 
 type AuthConfig struct {
-	BearerToken         string `json:"bearer_token"`
-	TruthSocialUsername string `json:"truthsocial_username"`
+	BearerToken             string `json:"bearer_token"`
+	BearerTokenBackup1      string `json:"bearer_token_backup_1"`
+	BearerTokenBackup2      string `json:"bearer_token_backup_2"`
+	BearerTokenUpdatedAt    string `json:"bearer_token_updated_at"`
+	BearerTokenValidityDays int    `json:"bearer_token_validity_days"`
+	TruthSocialUsername     string `json:"truthsocial_username"`
 }
 
 type TelegramConfig struct {

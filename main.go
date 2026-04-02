@@ -34,6 +34,8 @@ func main() {
 		log.Fatalf("failed to initialize config: %v", err)
 	}
 
+	ensureBearerTokenOnStartup()
+
 	store, err := NewPostStore()
 	if err != nil {
 		log.Fatalf("failed to initialize store: %v", err)
