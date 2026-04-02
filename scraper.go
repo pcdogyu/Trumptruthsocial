@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -72,15 +71,16 @@ func fetchLatestPostsWithLimit(profileURL string, cfg Config, limit int) ([]Post
 		return posts, nil
 	} else if err != nil {
 		apiErr = err
-		log.Printf("browser API fetch failed for %s: %v", profileURL, err)
+		log.Printf("Truth Social token/API fetch failed for %s: %v", profileURL, err)
 	}
 
-	page, err := fetchPageHTMLWithBrowser(profileURL)
+	page, err := fetchPageHTMLWithHTTP(profileURL, cfg)
+	if err != nil && browserExecutableAvailable() {
+		page, err = fetchPageHTMLWithBrowser(profileURL)
+	}
 	if err != nil {
-		page, err = fetchPageHTMLWithHTTP(profileURL, cfg)
-		if err != nil {
-			return nil, err
-		}
+		log.Printf("Truth Social page fetch failed for %s: %v", profileURL, err)
+		return nil, err
 	}
 
 	username := extractUsernameFromEntry(profileURL)
@@ -320,7 +320,11 @@ func fetchPostsViaBrowserAPI(profileURL string, cfg Config, limit int) ([]Post, 
 		debugf("fetchPostsViaBrowserAPI config token success: account=%s posts=%d", account, len(posts))
 		return posts, nil
 	} else if err != nil {
-		log.Printf("browser token fetch failed for %s: %v", profileURL, err)
+		log.Printf("Truth Social token/API fetch failed for %s: %v", profileURL, err)
+	}
+
+	if !browserExecutableAvailable() {
+		return fetchPostsViaBrowserAPIWithConfigTokens(account, cfg, limit)
 	}
 
 	candidates := browserProfileCandidates()
@@ -349,23 +353,15 @@ func fetchPostsViaBrowserAPIWithConfigTokens(account string, cfg Config, limit i
 		return nil, fmt.Errorf("no Truth Social access token available")
 	}
 
-	var posts []Post
-	err := runEphemeralBrowserTask(func(ctx context.Context) error {
-		var lastErr error
-		for _, token := range tokens {
-			p, err := fetchPostsViaBrowserAPIWithToken(ctx, account, token, limit)
-			if err == nil {
-				posts = p
-				return nil
-			}
-			lastErr = err
+	var lastErr error
+	for _, token := range tokens {
+		posts, err := fetchPostsViaHTTP(account, token, limit)
+		if err == nil {
+			return posts, nil
 		}
-		return lastErr
-	})
-	if err != nil {
-		return nil, err
+		lastErr = err
 	}
-	return posts, nil
+	return nil, lastErr
 }
 
 func fetchHistoricalPostsViaBrowserAPI(profileURL string, cfg Config, cutoff time.Time) ([]Post, error) {
@@ -383,6 +379,10 @@ func fetchHistoricalPostsViaBrowserAPI(profileURL string, cfg Config, cutoff tim
 		log.Printf("browser token historical fetch failed for %s: %v", profileURL, err)
 	} else if err == nil {
 		sawSuccess = true
+	}
+
+	if !browserExecutableAvailable() {
+		return fetchHistoricalPostsViaBrowserAPIWithConfigTokens(account, cfg, cutoff)
 	}
 
 	candidates := browserProfileCandidates()
@@ -412,6 +412,11 @@ func fetchHistoricalPostsViaBrowserAPI(profileURL string, cfg Config, cutoff tim
 	return nil, lastErr
 }
 
+func browserExecutableAvailable() bool {
+	_, err := findChromeExecPath()
+	return err == nil
+}
+
 func fetchHistoricalPosts(profileURL string, cfg Config, cutoff time.Time) ([]Post, error) {
 	return fetchHistoricalPostsViaBrowserAPI(profileURL, cfg, cutoff)
 }
@@ -422,23 +427,15 @@ func fetchHistoricalPostsViaBrowserAPIWithConfigTokens(account string, cfg Confi
 		return nil, fmt.Errorf("no Truth Social access token available")
 	}
 
-	var posts []Post
-	err := runEphemeralBrowserTask(func(ctx context.Context) error {
-		var lastErr error
-		for _, token := range tokens {
-			p, err := fetchHistoricalPostsViaBrowserAPIWithToken(ctx, account, token, cutoff)
-			if err == nil {
-				posts = p
-				return nil
-			}
-			lastErr = err
+	var lastErr error
+	for _, token := range tokens {
+		posts, err := fetchHistoricalPostsViaHTTP(account, token, cutoff)
+		if err == nil {
+			return posts, nil
 		}
-		return lastErr
-	})
-	if err != nil {
-		return nil, err
+		lastErr = err
 	}
-	return posts, nil
+	return nil, lastErr
 }
 
 func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int, userDataDir string) ([]Post, error) {
@@ -475,7 +472,7 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchPostsViaBrowserAPIWithToken(ctx, account, token, limit)
+			p, err := fetchPostsViaHTTP(account, token, limit)
 			if err == nil {
 				posts = p
 				return nil
@@ -524,7 +521,7 @@ func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config,
 
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchHistoricalPostsViaBrowserAPIWithToken(ctx, account, token, cutoff)
+			p, err := fetchHistoricalPostsViaHTTP(account, token, cutoff)
 			if err == nil {
 				posts = p
 				return nil
@@ -540,12 +537,54 @@ func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config,
 }
 
 func fetchPostsViaBrowserAPIWithToken(ctx context.Context, account, token string, limit int) ([]Post, error) {
-	lookupAccount, err := fetchLookupAccountViaBrowser(ctx, account, token)
+	_ = ctx
+	return fetchPostsViaHTTP(account, token, limit)
+}
+
+func fetchHistoricalPostsViaBrowserAPIWithToken(ctx context.Context, account, token string, cutoff time.Time) ([]Post, error) {
+	_ = ctx
+	return fetchHistoricalPostsViaHTTP(account, token, cutoff)
+}
+
+func fetchLookupAccountViaHTTP(account, token string) (mastodonLookupAccount, error) {
+	var lookupAccount mastodonLookupAccount
+	if err := doTruthSocialJSONRequest(http.MethodGet, "https://truthsocial.com/api/v1/accounts/lookup?acct="+url.QueryEscape(account), token, nil, &lookupAccount); err != nil {
+		return mastodonLookupAccount{}, err
+	}
+	if lookupAccount.ID == "" {
+		return mastodonLookupAccount{}, fmt.Errorf("lookup returned empty account id for %s", account)
+	}
+	return lookupAccount, nil
+}
+
+func fetchStatusesPageViaHTTP(accountID, token string, limit int, maxID string) ([]mastodonStatus, error) {
+	urlValues := url.Values{}
+	if limit > 0 {
+		urlValues.Set("limit", strconv.Itoa(limit))
+	}
+	if maxID != "" {
+		urlValues.Set("max_id", maxID)
+	}
+
+	statusesURL := "https://truthsocial.com/api/v1/accounts/" + url.QueryEscape(accountID) + "/statuses"
+	if encoded := urlValues.Encode(); encoded != "" {
+		statusesURL += "?" + encoded
+	}
+
+	var statuses []mastodonStatus
+	if err := doTruthSocialJSONRequest(http.MethodGet, statusesURL, token, nil, &statuses); err != nil {
+		return nil, err
+	}
+	return statuses, nil
+}
+
+func fetchPostsViaHTTP(account, token string, limit int) ([]Post, error) {
+	lookupAccount, err := fetchLookupAccountViaHTTP(account, token)
 	if err != nil {
 		return nil, err
 	}
 
-	statuses, err := fetchStatusesPageViaBrowser(ctx, lookupAccount.ID, token, limit, "")
+	statuses, err := fetchStatusesPageViaHTTP(lookupAccount.ID, token, limit, "")
 	if err != nil {
 		return nil, err
 	}
@@ -560,8 +599,8 @@ func fetchPostsViaBrowserAPIWithToken(ctx context.Context, account, token string
 	return posts, nil
 }
 
-func fetchHistoricalPostsViaBrowserAPIWithToken(ctx context.Context, account, token string, cutoff time.Time) ([]Post, error) {
-	lookupAccount, err := fetchLookupAccountViaBrowser(ctx, account, token)
+func fetchHistoricalPostsViaHTTP(account, token string, cutoff time.Time) ([]Post, error) {
+	lookupAccount, err := fetchLookupAccountViaHTTP(account, token)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +611,7 @@ func fetchHistoricalPostsViaBrowserAPIWithToken(ctx context.Context, account, to
 	collected := map[string]Post{}
 	maxID := ""
 	for page := 0; page < maxPages; page++ {
-		statuses, err := fetchStatusesPageViaBrowser(ctx, lookupAccount.ID, token, pageLimit, maxID)
+		statuses, err := fetchStatusesPageViaHTTP(lookupAccount.ID, token, pageLimit, maxID)
 		if err != nil {
 			return nil, err
 		}
@@ -614,68 +653,38 @@ func fetchHistoricalPostsViaBrowserAPIWithToken(ctx context.Context, account, to
 	return posts, nil
 }
 
-func fetchLookupAccountViaBrowser(ctx context.Context, account, token string) (mastodonLookupAccount, error) {
-	headers := browserAPIHeaders(token)
-	var lookupBody string
-	if err := chromedp.Run(ctx,
-		network.SetExtraHTTPHeaders(headers),
-		chromedp.Navigate("https://truthsocial.com/api/v1/accounts/lookup?acct="+url.QueryEscape(account)),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(750*time.Millisecond),
-		chromedp.Evaluate(`document.body ? document.body.innerText : ''`, &lookupBody),
-	); err != nil {
-		return mastodonLookupAccount{}, err
+func doTruthSocialJSONRequest(method, rawURL, token string, body io.Reader, target any) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(method, rawURL, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
 
-	var lookupAccount mastodonLookupAccount
-	if err := json.Unmarshal([]byte(strings.TrimSpace(lookupBody)), &lookupAccount); err != nil {
-		return mastodonLookupAccount{}, fmt.Errorf("lookup response parse failed: %w", err)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
 	}
-	if lookupAccount.ID == "" {
-		return mastodonLookupAccount{}, fmt.Errorf("lookup returned empty account id for %s", account)
-	}
-	return lookupAccount, nil
-}
+	defer resp.Body.Close()
 
-func fetchStatusesPageViaBrowser(ctx context.Context, accountID, token string, limit int, maxID string) ([]mastodonStatus, error) {
-	headers := browserAPIHeaders(token)
-	urlValues := url.Values{}
-	if limit > 0 {
-		urlValues.Set("limit", strconv.Itoa(limit))
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
 	}
-	if maxID != "" {
-		urlValues.Set("max_id", maxID)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status: %s", resp.Status)
 	}
-
-	statusesURL := "https://truthsocial.com/api/v1/accounts/" + url.QueryEscape(accountID) + "/statuses"
-	if encoded := urlValues.Encode(); encoded != "" {
-		statusesURL += "?" + encoded
+	if target == nil {
+		return nil
 	}
-
-	var statusesBody string
-	if err := chromedp.Run(ctx,
-		network.SetExtraHTTPHeaders(headers),
-		chromedp.Navigate(statusesURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(750*time.Millisecond),
-		chromedp.Evaluate(`document.body ? document.body.innerText : ''`, &statusesBody),
-	); err != nil {
-		return nil, err
+	if err := json.Unmarshal(respBody, target); err != nil {
+		return fmt.Errorf("response parse failed: %w", err)
 	}
-
-	var statuses []mastodonStatus
-	if err := json.Unmarshal([]byte(strings.TrimSpace(statusesBody)), &statuses); err != nil {
-		return nil, fmt.Errorf("statuses response parse failed: %w", err)
-	}
-	return statuses, nil
-}
-
-func browserAPIHeaders(token string) network.Headers {
-	return network.Headers{
-		"Accept":          "application/json",
-		"Authorization":   "Bearer " + token,
-		"Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-	}
+	return nil
 }
 
 func statusesToPosts(account string, lookupAccount mastodonLookupAccount, statuses []mastodonStatus) []Post {
