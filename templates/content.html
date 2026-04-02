@@ -110,6 +110,12 @@
         <div class="card-body">
             <div id="upgradeStatusText" class="text-muted mb-2">等待升级任务启动。</div>
             <div id="upgradeLogContent" class="upgrade-log-box">点击“升级”后，这里会显示升级脚本的实时日志。</div>
+            <div class="mt-3">
+                <div class="text-muted small mb-1">服务器状态</div>
+                <div id="serverStatusText" class="alert alert-light border mb-2 py-2">等待获取服务器状态。</div>
+                <div class="text-muted small mb-1">启动后最新20条日志</div>
+                <div id="serverLogContent" class="upgrade-log-box" style="height: 180px;">等待获取服务器启动日志。</div>
+            </div>
         </div>
     </div>
 </div>
@@ -274,6 +280,25 @@
             $log.scrollTop($log[0].scrollHeight);
         }
 
+        function setServerStatus(message, type) {
+            var $status = $('#serverStatusText');
+            if (!$status.length) {
+                return;
+            }
+            $status.removeClass('alert-light alert-info alert-success alert-warning alert-danger');
+            $status.addClass(type ? 'alert-' + type : 'alert-light');
+            $status.text(message || '');
+        }
+
+        function setServerLog(message) {
+            var $log = $('#serverLogContent');
+            if (!$log.length) {
+                return;
+            }
+            $log.text(message || '等待获取服务器启动日志。');
+            $log.scrollTop($log[0].scrollHeight);
+        }
+
         function showUpgradeWindow() {
             $('#upgradeFloatingWindow').removeClass('d-none');
         }
@@ -300,6 +325,8 @@
                         setUpgradeStatus('等待升级任务。', 'info');
                     }
                     setUpgradeLog(response.log || '暂无升级日志，等待脚本输出...');
+                    setServerStatus(response.server_status || '服务器状态: 未知', 'info');
+                    setServerLog(response.server_log || '暂无启动后日志。');
                     if (response.finished) {
                         stopUpgradePolling();
                     }
@@ -308,6 +335,8 @@
                     var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '读取升级日志失败。';
                     setUpgradeStatus(errorMsg, 'danger');
                     setUpgradeLog(errorMsg);
+                    setServerStatus('服务器状态获取失败。', 'danger');
+                    setServerLog('服务器启动日志获取失败。');
                     stopUpgradePolling();
                 }
             });
@@ -323,6 +352,8 @@
             showUpgradeWindow();
             setUpgradeStatus('正在启动升级任务...', 'info');
             setUpgradeLog('正在启动升级任务，请稍候...');
+            setServerStatus('正在等待服务器状态更新...', 'info');
+            setServerLog('正在等待服务器启动日志...');
             $.ajax({
                 url: '/upgrade',
                 type: 'POST',

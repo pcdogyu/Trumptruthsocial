@@ -13,6 +13,7 @@ import (
 )
 
 const upgradeServiceName = "truthsocial-upgrade.service"
+const truthsocialServiceName = "truthsocial.service"
 const upgradeLogFileName = "upgrade.log"
 
 func (a *App) handleUpgrade(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +93,8 @@ func (a *App) handleUpgradeLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	running := upgradeJobRunning()
+	serverStatus := readTruthSocialServiceStatus()
+	serverLog := readLatestLogLines(filepath.Join(baseDir, "go.log"), 20)
 	status := "idle"
 	if running {
 		status = "running"
@@ -104,10 +107,12 @@ func (a *App) handleUpgradeLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   status,
-		"running":  running,
-		"finished": !running && (strings.Contains(logText, "upgrade failed") || strings.Contains(logText, "upgrade finished")),
-		"log":      logText,
+		"status":        status,
+		"running":       running,
+		"finished":      !running && (strings.Contains(logText, "upgrade failed") || strings.Contains(logText, "upgrade finished")),
+		"log":           logText,
+		"server_status": serverStatus,
+		"server_log":    serverLog,
 	})
 }
 
@@ -222,4 +227,89 @@ func appendUpgradeLogLine(baseDir, line string) error {
 	}
 	_, err = file.WriteString(line)
 	return err
+}
+
+func readLatestLogLines(path string, lines int) string {
+	text, err := readTailFile(path, 256*1024)
+	if err != nil {
+		return ""
+	}
+	if lines <= 0 {
+		lines = 20
+	}
+	parts := strings.Split(text, "\n")
+	if len(parts) == 0 {
+		return ""
+	}
+
+	start := 0
+	if len(parts) > lines {
+		start = len(parts) - lines
+	}
+	selected := make([]string, 0, len(parts)-start)
+	for _, line := range parts[start:] {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		selected = append(selected, line)
+	}
+	return strings.Join(selected, "\n")
+}
+
+func readTruthSocialServiceStatus() string {
+	systemctl, err := exec.LookPath("systemctl")
+	if err != nil {
+		return "服务器状态: 未找到 systemctl"
+	}
+
+	args := []string{"show", truthsocialServiceName, "-p", "ActiveState", "-p", "SubState", "-p", "MainPID", "-p", "UnitFileState"}
+	out, err := exec.Command(systemctl, args...).CombinedOutput()
+	if err != nil {
+		state := strings.TrimSpace(string(out))
+		if state == "" {
+			return "服务器状态: 无法获取"
+		}
+		return "服务器状态: " + state
+	}
+
+	fields := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		fields[parts[0]] = parts[1]
+	}
+
+	activeState := strings.TrimSpace(fields["ActiveState"])
+	subState := strings.TrimSpace(fields["SubState"])
+	mainPID := strings.TrimSpace(fields["MainPID"])
+	unitState := strings.TrimSpace(fields["UnitFileState"])
+
+	if activeState == "" {
+		activeState = "unknown"
+	}
+
+	var b strings.Builder
+	b.WriteString("服务器状态: ")
+	b.WriteString(activeState)
+	if subState != "" {
+		b.WriteString(" (")
+		b.WriteString(subState)
+		b.WriteString(")")
+	}
+	if mainPID != "" && mainPID != "0" {
+		b.WriteString(", PID=")
+		b.WriteString(mainPID)
+	}
+	if unitState != "" {
+		b.WriteString(", unit=")
+		b.WriteString(unitState)
+	}
+	return b.String()
 }
