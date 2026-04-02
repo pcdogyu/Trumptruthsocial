@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,7 +17,18 @@ func ensureFiles() error {
 }
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+
+	rotator, err := NewDailyRotatingWriter(".", "go.log")
+	if err != nil {
+		log.Printf("failed to initialize log file: %v", err)
+	} else {
+		log.SetOutput(io.MultiWriter(os.Stdout, rotator))
+		defer func() {
+			_ = rotator.Close()
+		}()
+	}
+	log.Println("logging initialized")
 
 	if err := ensureFiles(); err != nil {
 		log.Fatalf("failed to initialize config: %v", err)

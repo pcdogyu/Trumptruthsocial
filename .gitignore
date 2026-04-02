@@ -17,6 +17,12 @@ config.yaml
 
 # Database file
 monitor.db
+posts.json
+
+# Go runtime artifacts and logs
+go.log
+go-*.log.gz
+truthsocial.exe
 
 # Screenshot files for debugging
 login_error.png

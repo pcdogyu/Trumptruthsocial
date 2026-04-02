@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,9 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/content", a.handleContent)
 	mux.HandleFunc("/content/", a.handleContent)
 	mux.HandleFunc("/delete_post/", a.handleDeletePost)
+	mux.HandleFunc("/block_post/", a.handleBlockPost)
 	mux.HandleFunc("/forward_post/", a.handleForwardPost)
+	mux.HandleFunc("/posts/bulk_action", a.handleBulkPostsAction)
 	mux.HandleFunc("/sync_content", a.handleSyncContent)
 	mux.HandleFunc("/sync_latest_post", a.handleSyncLatestPost)
 	mux.HandleFunc("/ai_config", a.handleAIConfig)
@@ -126,6 +129,7 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("config saved, accounts=%d", len(cfg.AccountsToMonitor))
 	http.Redirect(w, r, "/?saved=1", http.StatusSeeOther)
 }
 
@@ -144,7 +148,7 @@ func (a *App) handleContent(w http.ResponseWriter, r *http.Request) {
 		Title:            "历史内容",
 		ActivePage:       "content",
 		Git:              a.gitInfo,
-		Posts:            a.store.GetAllPosts(selected, 200),
+		Posts:            a.store.GetAllPosts(selected, 0),
 		Usernames:        a.store.GetUsernames(),
 		SelectedUsername: selected,
 	}
@@ -172,7 +176,32 @@ func (a *App) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": fmt.Sprintf("未在数据库中找到帖子 %s。", postID)})
 		return
 	}
+	log.Printf("post deleted: %s", postID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": fmt.Sprintf("帖子 %s 已删除。", postID)})
+}
+
+func (a *App) handleBlockPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	postID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/block_post/"))
+	if postID == "" {
+		http.Error(w, "post id required", http.StatusBadRequest)
+		return
+	}
+
+	ok, err := a.store.SetStatus(postID, PostStatusBlocked)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": fmt.Sprintf("未在数据库中找到帖子 %s。", postID)})
+		return
+	}
+	log.Printf("post blocked: %s", postID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": fmt.Sprintf("帖子 %s 已屏蔽。", postID)})
 }
 
 func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
@@ -192,9 +221,14 @@ func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "帖子未找到。"})
 		return
 	}
+	if post.Status == PostStatusBlocked {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "该帖子已被屏蔽，不能转发。"})
+		return
+	}
 	cfg, _ := LoadConfig()
 	success, message := forwardPostToTelegram(cfg, post)
 	if success {
+		log.Printf("post forwarded: %s", postID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": message})
 		return
 	}
@@ -213,6 +247,7 @@ func (a *App) handleSyncContent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, SyncResponse{Status: "error", Message: err.Error()})
 		return
 	}
+	log.Printf("historical sync completed, days=%d, new_posts=%d", req.Days, added)
 	writeJSON(w, http.StatusOK, SyncResponse{Status: "info", Message: fmt.Sprintf("历史同步完成，新增 %d 条帖子。", added), NewPosts: added})
 }
 
@@ -226,7 +261,49 @@ func (a *App) handleSyncLatestPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, SyncResponse{Status: "error", Message: err.Error()})
 		return
 	}
+	log.Printf("latest sync completed, new_posts=%d", added)
 	writeJSON(w, http.StatusOK, SyncResponse{Status: "success", Message: fmt.Sprintf("最新帖子同步完成，新增 %d 条帖子。", added), NewPosts: added})
+}
+
+func (a *App) handleBulkPostsAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req BulkActionRequest
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	req.Action = strings.ToLower(strings.TrimSpace(req.Action))
+	if len(req.IDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "请选择至少一条帖子。"})
+		return
+	}
+
+	switch req.Action {
+	case "delete":
+		count, err := a.store.BulkDelete(req.IDs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("bulk delete posts: %d items", count)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "success", "message": fmt.Sprintf("已删除 %d 条帖子。", count), "count": count})
+	case "block":
+		count, err := a.store.BulkSetStatus(req.IDs, PostStatusBlocked)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("bulk block posts: %d items", count)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "success", "message": fmt.Sprintf("已屏蔽 %d 条帖子。", count), "count": count})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "未知操作类型。"})
+	}
 }
 
 func (a *App) handleAIConfig(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +340,7 @@ func (a *App) handleSaveAIConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("ai config saved, enabled=%t", cfg.AIAnalysis.Enabled)
 	http.Redirect(w, r, "/ai_config", http.StatusSeeOther)
 }
 
@@ -306,6 +384,7 @@ func (a *App) handleMessagePushSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
+	log.Println("telegram config saved")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Telegram 配置已成功保存。"})
 }
 
@@ -318,6 +397,7 @@ func (a *App) handleMessagePushTest(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := LoadConfig()
 	ok, message := sendTelegramTestMessage(cfg)
 	if ok {
+		log.Println("telegram test message sent")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": message})
 		return
 	}

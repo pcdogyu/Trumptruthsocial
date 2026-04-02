@@ -34,6 +34,7 @@ type Post struct {
 	WebURL         string `json:"web_url"`
 	VideoURL       string `json:"video_url"`
 	Timestamp      string `json:"timestamp"`
+	Status         string `json:"status"`
 	RawData        string `json:"raw_data,omitempty"`
 	SentToTelegram bool   `json:"sent_to_telegram"`
 }
@@ -89,6 +90,16 @@ type SyncResponse struct {
 type SyncRequest struct {
 	Days int `json:"days"`
 }
+
+type BulkActionRequest struct {
+	Action string   `json:"action"`
+	IDs    []string `json:"ids"`
+}
+
+const (
+	PostStatusNormal  = "normal"
+	PostStatusBlocked = "blocked"
+)
 
 func normalizeTimeString(s string) string {
 	if s == "" {

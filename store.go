@@ -45,6 +45,9 @@ func (s *PostStore) load() error {
 		if post.ID == "" {
 			continue
 		}
+		if post.Status == "" {
+			post.Status = PostStatusNormal
+		}
 		s.Posts[post.ID] = post
 	}
 	return nil
@@ -75,6 +78,9 @@ func (s *PostStore) AddPost(post Post) (bool, error) {
 		return false, nil
 	}
 	post.Timestamp = normalizeTimeString(post.Timestamp)
+	if post.Status == "" {
+		post.Status = PostStatusNormal
+	}
 	s.Posts[post.ID] = post
 	return true, s.saveLocked()
 }
@@ -117,7 +123,7 @@ func (s *PostStore) GetUnsentPosts() []Post {
 
 	items := make([]Post, 0)
 	for _, post := range s.Posts {
-		if !post.SentToTelegram {
+		if post.Status != PostStatusBlocked && !post.SentToTelegram {
 			items = append(items, post)
 		}
 	}
@@ -132,6 +138,9 @@ func (s *PostStore) GetAllPosts(username string, limit int) []Post {
 	items := make([]Post, 0)
 	for _, post := range s.Posts {
 		if username == "" || strings.EqualFold(post.Username, username) {
+			if post.Status == "" {
+				post.Status = PostStatusNormal
+			}
 			items = append(items, post)
 		}
 	}
@@ -158,6 +167,64 @@ func (s *PostStore) GetUsernames() []string {
 	}
 	sort.Strings(usernames)
 	return usernames
+}
+
+func (s *PostStore) SetStatus(postID, status string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	post, ok := s.Posts[postID]
+	if !ok {
+		return false, nil
+	}
+	post.Status = normalizeStatus(status)
+	if post.Status == PostStatusBlocked {
+		post.SentToTelegram = true
+	}
+	s.Posts[postID] = post
+	return true, s.saveLocked()
+}
+
+func (s *PostStore) BulkSetStatus(postIDs []string, status string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	updated := 0
+	normalized := normalizeStatus(status)
+	for _, postID := range postIDs {
+		post, ok := s.Posts[postID]
+		if !ok {
+			continue
+		}
+		post.Status = normalized
+		if normalized == PostStatusBlocked {
+			post.SentToTelegram = true
+		}
+		s.Posts[postID] = post
+		updated++
+	}
+	if updated > 0 {
+		return updated, s.saveLocked()
+	}
+	return 0, nil
+}
+
+func (s *PostStore) BulkDelete(postIDs []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	deleted := 0
+	for _, postID := range postIDs {
+		if _, ok := s.Posts[postID]; !ok {
+			continue
+		}
+		delete(s.Posts, postID)
+		deleted++
+	}
+	if deleted > 0 {
+		return deleted, s.saveLocked()
+	}
+	return 0, nil
 }
 
 func sortPostsDesc(items []Post) {
@@ -193,4 +260,13 @@ func parsePostTime(value string) time.Time {
 		return t
 	}
 	return time.Time{}
+}
+
+func normalizeStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case PostStatusBlocked:
+		return PostStatusBlocked
+	default:
+		return PostStatusNormal
+	}
 }
