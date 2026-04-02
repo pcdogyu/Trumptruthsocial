@@ -137,6 +137,7 @@
 <script>
     $(document).ready(function() {
         var upgradePollTimer = null;
+        var loginRequestTimeout = null;
 
         function setLoginStatus(message, type) {
             var $status = $('#truthsocialLoginStatus');
@@ -232,17 +233,43 @@
             var $button = $(this);
             var originalText = $button.text();
             $button.prop('disabled', true).text('打开中...');
-            setLoginStatus('正在打开登录窗口，请在浏览器中完成 Truth Social 登录。', 'info');
+            setLoginStatus('正在请求后端登录接口，请稍候。', 'info');
+
+            loginRequestTimeout = setTimeout(function() {
+                setLoginStatus('登录请求超时，请稍后重试。', 'warning');
+                $button.prop('disabled', false).text(originalText);
+            }, 5 * 60 * 1000);
 
             $.ajax({
                 url: '/truthsocial/login',
                 type: 'POST',
+                data: { source: 'web-ui' },
+                dataType: 'json',
                 success: function(response) {
-                    setLoginStatus(response.message || 'Bearer Token 已更新。', 'success');
-                    setTimeout(function() { location.reload(); }, 1500);
+                    if (loginRequestTimeout) {
+                        clearTimeout(loginRequestTimeout);
+                        loginRequestTimeout = null;
+                    }
+
+                    if (response.status === 'success') {
+                        setLoginStatus(response.message || 'Bearer Token 已更新。', 'success');
+                        setTimeout(function() { location.reload(); }, 1500);
+                    } else {
+                        setLoginStatus(response.message || '登录失败。', 'danger');
+                    }
                 },
                 error: function(xhr) {
-                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '登录失败。';
+                    if (loginRequestTimeout) {
+                        clearTimeout(loginRequestTimeout);
+                        loginRequestTimeout = null;
+                    }
+
+                    var errorMsg = '登录失败。';
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMsg = xhr.responseJSON.message;
+                    } else if (xhr.responseText) {
+                        errorMsg = xhr.responseText;
+                    }
                     setLoginStatus(errorMsg, 'danger');
                 },
                 complete: function() {
