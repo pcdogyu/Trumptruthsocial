@@ -6,11 +6,36 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
 
+var youtubeURLRe = regexp.MustCompile(`(?i)https?://(?:www\.|m\.)?(?:youtube\.com/watch\?v=[^\s<]+|youtu\.be/[^\s<]+)`)
+
 func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
+	youtubeURL := extractYouTubeURL(post.Content)
+	if youtubeURL == "" {
+		youtubeURL = extractYouTubeURL(post.VideoURL)
+	}
+	if youtubeURL != "" {
+		text := buildYouTubeTelegramText(post, youtubeURL)
+		var replyMarkup any
+		if strings.TrimSpace(post.WebURL) != "" {
+			replyMarkup = map[string]any{
+				"inline_keyboard": []any{
+					[]any{
+						map[string]string{
+							"text": "查看原文",
+							"url":  post.WebURL,
+						},
+					},
+				},
+			}
+		}
+		return sendTelegramHTMLMessageWithReplyMarkup(cfg, text, replyMarkup)
+	}
+
 	if strings.TrimSpace(post.VideoURL) != "" {
 		caption := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
 		if strings.TrimSpace(post.Content) != "" {
@@ -37,6 +62,10 @@ func sendTelegramTestMessage(cfg Config) (bool, string) {
 }
 
 func sendTelegramHTMLMessage(cfg Config, text string) (bool, string) {
+	return sendTelegramHTMLMessageWithReplyMarkup(cfg, text, nil)
+}
+
+func sendTelegramHTMLMessageWithReplyMarkup(cfg Config, text string, replyMarkup any) (bool, string) {
 	botToken := strings.TrimSpace(cfg.Telegram.BotToken)
 	chatID := strings.TrimSpace(cfg.Telegram.ChatID)
 	if botToken == "" || chatID == "" || strings.Contains(botToken, "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -48,6 +77,9 @@ func sendTelegramHTMLMessage(cfg Config, text string) (bool, string) {
 		"text":                     text,
 		"parse_mode":               "HTML",
 		"disable_web_page_preview": false,
+	}
+	if replyMarkup != nil {
+		payload["reply_markup"] = replyMarkup
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -121,4 +153,80 @@ func sendTelegramVideo(cfg Config, videoURL, caption string) (bool, string) {
 		}
 	}
 	return false, "发送 Telegram 视频失败。"
+}
+
+func extractYouTubeURL(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	compact := strings.Join(strings.Fields(text), "")
+	match := youtubeURLRe.FindString(compact)
+	if match == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(match), "https://m.youtube.com/") {
+		match = "https://www.youtube.com/" + strings.TrimPrefix(match, "https://m.youtube.com/")
+	} else if strings.HasPrefix(strings.ToLower(match), "http://m.youtube.com/") {
+		match = "https://www.youtube.com/" + strings.TrimPrefix(match, "http://m.youtube.com/")
+	}
+	if strings.HasPrefix(strings.ToLower(match), "http://www.youtube.com/") {
+		match = "https://www.youtube.com/" + strings.TrimPrefix(match, "http://www.youtube.com/")
+	}
+	return strings.TrimSpace(match)
+}
+
+func buildYouTubeTelegramText(post Post, youtubeURL string) string {
+	title := cleanTelegramContent(post.Content)
+	text := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
+	if title != "" {
+		text += html.EscapeString(title) + "\n\n"
+	}
+	text += html.EscapeString(youtubeURL)
+	return text
+}
+
+func cleanTelegramContent(content string) string {
+	lines := strings.Split(content, "\n")
+	parts := make([]string, 0, len(lines))
+	skippingURL := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			skippingURL = false
+			continue
+		}
+		lower := strings.ToLower(line)
+		if isLikelyURLLine(lower) {
+			skippingURL = true
+			continue
+		}
+		if skippingURL && isLikelyURLContinuation(line) {
+			continue
+		}
+		skippingURL = false
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func isLikelyURLLine(lower string) bool {
+	return strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "www.") ||
+		strings.Contains(lower, "youtube.com") ||
+		strings.Contains(lower, "youtu.be")
+}
+
+func isLikelyURLContinuation(line string) bool {
+	if strings.Contains(line, " ") {
+		return false
+	}
+	if len(line) < 6 {
+		return false
+	}
+	if strings.Contains(line, ".") || strings.Contains(line, "?") || strings.Contains(line, "&") || strings.Contains(line, "=") || strings.Contains(line, "/") {
+		return true
+	}
+	return false
 }
