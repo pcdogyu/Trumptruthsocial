@@ -150,9 +150,36 @@ func newLoginSession(username string) (*LoginSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	extensionDir, err := os.MkdirTemp("", "truthsocial-login-extension-*")
+	profileDir, err = filepath.Abs(profileDir)
 	if err != nil {
 		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+
+	baseDir, err := os.Getwd()
+	if err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	baseDir, err = filepath.Abs(baseDir)
+	if err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	extensionRoot := filepath.Join(baseDir, ".truthsocial-login-extension")
+	if err := os.MkdirAll(extensionRoot, 0o700); err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	extensionDir, err := os.MkdirTemp(extensionRoot, "session-*")
+	if err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	extensionDir, err = filepath.Abs(extensionDir)
+	if err != nil {
+		_ = os.RemoveAll(profileDir)
+		_ = os.RemoveAll(extensionDir)
 		return nil, err
 	}
 
@@ -251,12 +278,24 @@ func (s *LoginSession) startX11VNC() error {
 func (s *LoginSession) startChromium() error {
 	displayArg := ":" + strconv.Itoa(s.Display)
 	runtimeDir := filepath.Join(os.TempDir(), "truthsocial-runtime-"+s.ID)
+	if !filepath.IsAbs(runtimeDir) {
+		var err error
+		runtimeDir, err = filepath.Abs(runtimeDir)
+		if err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
 	if err := s.ensureCaptureExtension(); err != nil {
 		return err
 	}
+	manifestPath := filepath.Join(s.ExtensionDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		return fmt.Errorf("扩展文件不存在或不可读: %s: %w", manifestPath, err)
+	}
+	log.Printf("truthsocial login extension ready: session=%s extension_dir=%s manifest=%s profile_dir=%s", s.ID, s.ExtensionDir, manifestPath, s.ProfileDir)
 
 	cmd := exec.Command(s.Chromium,
 		"--no-first-run",
