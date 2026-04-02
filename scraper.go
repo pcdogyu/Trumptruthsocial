@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 var (
@@ -46,40 +51,30 @@ func extractUsernameFromEntry(entry string) string {
 }
 
 func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, profileURL, nil)
+	page, err := fetchPageHTMLWithBrowser(profileURL)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
-	if token := strings.TrimSpace(cfg.Auth.BearerToken); token != "" && !strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN") {
-		req.Header.Set("Authorization", "Bearer "+token)
+		page, err = fetchPageHTMLWithHTTP(profileURL, cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("unexpected status: %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	page := string(body)
 	username := extractUsernameFromEntry(profileURL)
 	if username == "" {
 		username = "unknown"
 	}
 
+	if isCloudflareBlock(page) {
+		return nil, fmt.Errorf("truth social returned a Cloudflare block page")
+	}
+
+	return parsePostsFromHTML(page, username), nil
+}
+
+func parsePostsFromHTML(page, username string) []Post {
 	opens := openTagRe.FindAllStringSubmatchIndex(page, -1)
 	if len(opens) == 0 {
-		return []Post{}, nil
+		return []Post{}
 	}
 
 	posts := make([]Post, 0, len(opens))
@@ -132,10 +127,100 @@ func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
 			WebURL:    webURL,
 			VideoURL:  videoURL,
 			Timestamp: timestamp,
+			Status:    PostStatusNormal,
 		})
 	}
 
-	return posts, nil
+	return posts
+}
+
+func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
+	chromePath, err := findChromeExecPath()
+	if err != nil {
+		return "", err
+	}
+
+	userDataDir, err := filepath.Abs(".chrome-profile")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(userDataDir, 0755); err != nil {
+		return "", err
+	}
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.UserDataDir(userDataDir),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("excludeSwitches", "enable-automation"),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	)
+
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	var page string
+	tasks := []chromedp.Action{
+		chromedp.Navigate(profileURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(10 * time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_ = chromedp.WaitVisible(`article[data-id], div[data-id]`, chromedp.ByQuery).Do(ctx)
+			return nil
+		}),
+		chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
+		chromedp.Sleep(2 * time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_ = chromedp.Evaluate(`document.querySelectorAll('.status__content__read-more-button, button.read-more-button').forEach(function(btn){ if (btn.offsetParent !== null) btn.click(); });`, nil).Do(ctx)
+			return nil
+		}),
+		chromedp.Sleep(1 * time.Second),
+		chromedp.OuterHTML("html", &page, chromedp.ByQuery),
+	}
+
+	if err := chromedp.Run(ctx, tasks...); err != nil {
+		return "", err
+	}
+	return page, nil
+}
+
+func fetchPageHTMLWithHTTP(profileURL string, cfg Config) (string, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, profileURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
+	if token := strings.TrimSpace(cfg.Auth.BearerToken); token != "" && !strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN") {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func extractContent(block string) string {
@@ -200,4 +285,27 @@ func removeScriptStyle(s string) string {
 	s = scriptRe.ReplaceAllString(s, "")
 	s = styleRe.ReplaceAllString(s, "")
 	return s
+}
+
+func isCloudflareBlock(page string) bool {
+	lower := strings.ToLower(page)
+	return strings.Contains(lower, "attention required! | cloudflare") ||
+		strings.Contains(lower, "please enable cookies") ||
+		strings.Contains(lower, "you are unable to access truthsocial.com") ||
+		strings.Contains(lower, "cloudflare ray id")
+}
+
+func findChromeExecPath() (string, error) {
+	candidates := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no Chrome/Edge executable found")
 }

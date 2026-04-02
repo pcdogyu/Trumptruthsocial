@@ -23,6 +23,7 @@ posts.json
 go.log
 go-*.log.gz
 truthsocial.exe
+.chrome-profile/
 
 # Screenshot files for debugging
 login_error.png
