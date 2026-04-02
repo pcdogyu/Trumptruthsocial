@@ -72,6 +72,7 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 			}
 		}
 	}
+	forwardUnsentPosts(store, cfg)
 	return added, nil
 }
 
@@ -105,6 +106,7 @@ func syncLatestAccounts(store *PostStore) (int, error) {
 			added++
 		}
 	}
+	forwardUnsentPosts(store, cfg)
 	return added, nil
 }
 
@@ -143,8 +145,46 @@ func runMonitor(store *PostStore) {
 				}
 			}
 		}
+		forwardUnsentPosts(store, cfg)
 
 		log.Printf("监控周期结束，休眠 %s", interval)
 		time.Sleep(interval)
 	}
+}
+
+func forwardUnsentPosts(store *PostStore, cfg Config) {
+	if cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" || strings.Contains(cfg.Telegram.BotToken, "YOUR_TELEGRAM_BOT_TOKEN") {
+		return
+	}
+
+	unsent := store.GetUnsentPosts()
+	for _, post := range unsent {
+		var ok bool
+		var message string
+		if strings.TrimSpace(post.VideoURL) != "" {
+			caption := "<b>" + post.Username + " 发布了新视频:</b>\n\n" + htmlEscape(post.Content) + "\n\n<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
+			ok, message = sendTelegramVideo(cfg, post.VideoURL, caption)
+		} else {
+			ok, message = forwardPostToTelegram(cfg, post)
+		}
+		if ok {
+			if _, err := store.MarkSent(post.ID); err != nil {
+				log.Printf("mark sent failed for %s: %v", post.ID, err)
+			}
+		} else {
+			log.Printf("telegram send failed for %s: %s", post.ID, message)
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func htmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"'", "&#39;",
+		"\"", "&quot;",
+	)
+	return replacer.Replace(value)
 }
