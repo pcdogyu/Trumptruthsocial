@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -291,7 +290,6 @@ func (s *LoginSession) monitor() {
 	}()
 
 	deadline := time.Now().Add(loginSessionTimeout)
-	debugURL := fmt.Sprintf("http://%s:%d", loginSessionBrowserAddress, s.DebugPort)
 	for {
 		select {
 		case <-s.done:
@@ -304,7 +302,7 @@ func (s *LoginSession) monitor() {
 			return
 		}
 
-		token, cookies, err := readTokenAndCookiesFromRemoteBrowser(debugURL, s.LoginURL)
+		token, cookies, err := readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 		if err != nil {
 			debugf("login session token poll failed: session=%s err=%v", s.ID, err)
 			time.Sleep(loginSessionPollInterval)
@@ -433,8 +431,7 @@ func (s *LoginSession) Snapshot() map[string]any {
 }
 
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
-	debugURL := fmt.Sprintf("http://%s:%d", loginSessionBrowserAddress, s.DebugPort)
-	return readTokenAndCookiesFromRemoteBrowser(debugURL, s.LoginURL)
+	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 }
 
 func persistLoginSessionData(sessionID, username, token string, cookies []CapturedCookie) error {
@@ -452,81 +449,64 @@ func persistLoginSessionData(sessionID, username, token string, cookies []Captur
 	return os.WriteFile("truthsocial_login_session.json", data, 0o600)
 }
 
-func readTokenAndCookiesFromRemoteBrowser(debugURL, loginURL string) (string, []CapturedCookie, error) {
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), debugURL)
-	defer allocCancel()
-
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-	defer browserCancel()
-
-	targets, err := chromedp.Targets(browserCtx)
-	if err != nil {
-		return "", nil, err
-	}
-
-	var pageTarget *target.Info
-	for _, t := range targets {
-		if t.Type == "page" && strings.HasPrefix(t.URL, loginURL) {
-			pageTarget = t
-			break
-		}
-	}
-	if pageTarget == nil {
-		for _, t := range targets {
-			if t.Type == "page" {
-				pageTarget = t
-				break
-			}
-		}
-	}
-	if pageTarget == nil {
-		return "", nil, fmt.Errorf("no browser page target found")
-	}
-
-	ctx, cancel := chromedp.NewContext(browserCtx, chromedp.WithTargetID(pageTarget.TargetID))
-	defer cancel()
-
+func readTokenAndCookiesFromProfileDir(userDataDir, loginURL string) (string, []CapturedCookie, error) {
+	account := extractUsernameFromEntry(loginURL)
 	var token string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`(function() {
-		try {
-			const raw = localStorage.getItem('truth:auth');
-			if (!raw) return '';
-			const auth = JSON.parse(raw);
-			const users = auth && auth.users ? auth.users : {};
-			const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-			const first = current || Object.values(users)[0] || null;
-			return first && first.access_token ? first.access_token : '';
-		} catch (e) {
-			return '';
-		}
-	})()`, &token)); err != nil {
-		return "", nil, err
-	}
+	var cookies []CapturedCookie
 
-	cookies, err := network.GetCookies().WithUrls([]string{loginURL, "https://truthsocial.com/"}).Do(ctx)
+	err := runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate(loginURL),
+			chromedp.WaitReady("body", chromedp.ByQuery),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				return chromedp.Evaluate(`(function() {
+					try {
+						const raw = localStorage.getItem('truth:auth');
+						if (!raw) return '';
+						const auth = JSON.parse(raw);
+						const users = auth && auth.users ? auth.users : {};
+						const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+						const first = current || Object.values(users)[0] || null;
+						return first && first.access_token ? first.access_token : '';
+					} catch (e) {
+						return '';
+					}
+				})()`, &token).Do(ctx)
+			}),
+		); err != nil {
+			return err
+		}
+
+		cookieRows, err := network.GetCookies().WithUrls([]string{loginURL, "https://truthsocial.com/"}).Do(ctx)
+		if err != nil {
+			return err
+		}
+
+		captured := make([]CapturedCookie, 0, len(cookieRows))
+		for _, c := range cookieRows {
+			if c == nil {
+				continue
+			}
+			captured = append(captured, CapturedCookie{
+				Name:     c.Name,
+				Value:    c.Value,
+				Domain:   c.Domain,
+				Path:     c.Path,
+				Expires:  c.Expires,
+				HTTPOnly: c.HTTPOnly,
+				Secure:   c.Secure,
+				SameSite: string(c.SameSite),
+				Priority: string(c.Priority),
+			})
+		}
+		cookies = captured
+		return nil
+	})
 	if err != nil {
-		return token, nil, err
+		return "", nil, fmt.Errorf("profile token capture failed for %s: %w", account, err)
 	}
 
-	captured := make([]CapturedCookie, 0, len(cookies))
-	for _, c := range cookies {
-		if c == nil {
-			continue
-		}
-		captured = append(captured, CapturedCookie{
-			Name:     c.Name,
-			Value:    c.Value,
-			Domain:   c.Domain,
-			Path:     c.Path,
-			Expires:  c.Expires,
-			HTTPOnly: c.HTTPOnly,
-			Secure:   c.Secure,
-			SameSite: string(c.SameSite),
-			Priority: string(c.Priority),
-		})
-	}
-
-	return strings.TrimSpace(token), captured, nil
+	return strings.TrimSpace(token), cookies, nil
 }
 
 func cookieNames(cookies []CapturedCookie) []string {
