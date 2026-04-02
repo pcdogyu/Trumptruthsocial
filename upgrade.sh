@@ -23,7 +23,15 @@ echo "[$(date -Iseconds)] pulling latest code"
 git pull --ff-only origin golang
 
 echo "[$(date -Iseconds)] building truthsocial.exe"
-go build -o truthsocial.exe .
+TMP_BIN="$ROOT_DIR/truthsocial.exe.new"
+rm -f "$TMP_BIN"
+go build -o "$TMP_BIN" .
+mv -f "$TMP_BIN" truthsocial.exe
+if [[ ! -x truthsocial.exe ]]; then
+  echo "[$(date -Iseconds)] built binary missing or not executable"
+  exit 1
+fi
+echo "[$(date -Iseconds)] binary updated: $(stat -c '%n size=%s bytes mtime=%y' truthsocial.exe)"
 
 echo "[$(date -Iseconds)] restarting truthsocial.service"
 systemctl restart truthsocial.service
