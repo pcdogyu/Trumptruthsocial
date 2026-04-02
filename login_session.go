@@ -546,21 +546,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 `, s.ID)
 	content := fmt.Sprintf(`(() => {
+%s
   const sentKey = 'truthsocial_capture_sent_%s';
-
-  function readToken() {
-    try {
-      const raw = localStorage.getItem('truth:auth');
-      if (!raw) return '';
-      const auth = JSON.parse(raw);
-      const users = auth && auth.users ? auth.users : {};
-      const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-      const first = current || Object.values(users)[0] || null;
-      return first && first.access_token ? first.access_token : '';
-    } catch (e) {
-      return '';
-    }
-  }
 
   function sendCapture(token) {
     return new Promise((resolve, reject) => {
@@ -585,7 +572,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sessionStorage.getItem(sentKey) === '1') {
       return;
     }
-    const token = readToken();
+    const token = readTruthSocialBearerToken();
     if (!token) {
       return;
     }
@@ -600,7 +587,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   tick();
   setInterval(tick, 1000);
 })();
-`, s.ID)
+`, browserTokenDiscoveryJS(), s.ID)
 	config := fmt.Sprintf(`self.TRUTHSOCIAL_LOGIN_SESSION_ID = %q;
 self.TRUTHSOCIAL_LOGIN_USERNAME = %q;
 self.TRUTHSOCIAL_LOGIN_CAPTURE_URL = %q;
@@ -646,17 +633,8 @@ func readTokenAndCookiesFromProfileDir(userDataDir, loginURL string) (string, []
 			chromedp.WaitReady("body", chromedp.ByQuery),
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				return chromedp.Evaluate(`(function() {
-					try {
-						const raw = localStorage.getItem('truth:auth');
-						if (!raw) return '';
-						const auth = JSON.parse(raw);
-						const users = auth && auth.users ? auth.users : {};
-						const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-						const first = current || Object.values(users)[0] || null;
-						return first && first.access_token ? first.access_token : '';
-					} catch (e) {
-						return '';
-					}
+					`+browserTokenDiscoveryJS()+`
+					return readTruthSocialBearerToken();
 				})()`, &token).Do(ctx)
 			}),
 		); err != nil {

@@ -104,17 +104,8 @@ func waitForBearerToken(ctx context.Context, timeout, pollInterval time.Duration
 func readBearerTokenFromPage(ctx context.Context) (string, error) {
 	var token string
 	js := `(function() {
-		try {
-			const raw = localStorage.getItem('truth:auth');
-			if (!raw) return '';
-			const auth = JSON.parse(raw);
-			const users = auth && auth.users ? auth.users : {};
-			const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-			const first = current || Object.values(users)[0] || null;
-			return first && first.access_token ? first.access_token : '';
-		} catch (e) {
-			return '';
-		}
+` + browserTokenDiscoveryJS() + `
+		return readTruthSocialBearerToken();
 	})()`
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &token)); err != nil {
 		return "", err
