@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        html, body { height: 100%; margin: 0; background: #0f172a; color: #e5e7eb; }
+        body { display: flex; flex-direction: column; }
+        .topbar {
+            background: linear-gradient(90deg, #111827 0%, #1f2937 100%);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            padding: 0.85rem 1rem;
+        }
+        .status-line {
+            font-size: 0.95rem;
+            color: #cbd5e1;
+        }
+        .viewer-shell {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        #screen {
+            flex: 1;
+            min-height: 480px;
+            background: #111827;
+        }
+        .footer-note {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            background: rgba(15, 23, 42, 0.9);
+            padding: 0.65rem 1rem;
+        }
+        .badge-soft {
+            background: rgba(59, 130, 246, 0.15);
+            color: #bfdbfe;
+            border: 1px solid rgba(59, 130, 246, 0.25);
+        }
+    </style>
+</head>
+<body>
+<div class="topbar">
+    <div class="d-flex flex-wrap justify-content-between align-items-center">
+        <div>
+            <div class="h5 mb-1">Truth Social 远程登录窗口</div>
+            <div class="status-line" id="statusText">正在初始化会话...</div>
+        </div>
+        <div class="text-right">
+            <div class="badge badge-soft px-3 py-2 mb-1">Session: {{.SessionID}}</div>
+            <div class="small text-muted">用户名：@{{.Username}}</div>
+        </div>
+    </div>
+</div>
+
+<div class="viewer-shell">
+    <div id="screen"></div>
+</div>
+
+<div class="footer-note d-flex flex-wrap justify-content-between align-items-center">
+    <span id="detailText">等待连接远程浏览器...</span>
+    <span>
+        <a href="/" class="text-info">返回配置</a>
+    </span>
+</div>
+
+<script type="module">
+    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc/core/rfb.js';
+
+    const sessionId = "{{.SessionID}}";
+    const statusUrl = `${window.location.origin}/truthsocial/login/session/${encodeURIComponent(sessionId)}/status`;
+    const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${wsScheme}://${window.location.host}/truthsocial/login/session/${encodeURIComponent(sessionId)}/vnc`;
+    const screen = document.getElementById('screen');
+    const statusText = document.getElementById('statusText');
+    const detailText = document.getElementById('detailText');
+    let statusTimer = null;
+    let openerRefreshed = false;
+
+    function setStatus(message, kind) {
+        statusText.textContent = message;
+        detailText.textContent = message;
+        statusText.className = 'status-line';
+        if (kind === 'success') {
+            statusText.classList.add('text-success');
+        } else if (kind === 'warning') {
+            statusText.classList.add('text-warning');
+        } else if (kind === 'danger') {
+            statusText.classList.add('text-danger');
+        } else if (kind === 'info') {
+            statusText.classList.add('text-info');
+        }
+    }
+
+    function refreshOpenerOnce() {
+        if (openerRefreshed) {
+            return;
+        }
+        openerRefreshed = true;
+        try {
+            if (window.opener && !window.opener.closed) {
+                window.opener.location.reload();
+            }
+        } catch (err) {
+            console.warn('refresh opener failed', err);
+        }
+    }
+
+    async function pollStatus() {
+        try {
+            const response = await fetch(statusUrl, { cache: 'no-store' });
+            const data = await response.json();
+            const state = data.state || 'unknown';
+            const message = data.message || '正在等待登录结果...';
+            const token = data.token || '';
+            const cookieCount = typeof data.cookie_count === 'number' ? data.cookie_count : 0;
+
+            if (state === 'running' || state === 'starting') {
+                setStatus(message, 'info');
+                detailText.textContent = `${message} 已捕获 Cookie 数量：${cookieCount}`;
+                return;
+            }
+
+            if (state === 'success') {
+                setStatus(message || '登录已完成。', 'success');
+                detailText.textContent = `${message || '登录已完成。'} 当前 Token：${token || '未显示'}，Cookie 数量：${cookieCount}`;
+                refreshOpenerOnce();
+                return;
+            }
+
+            if (state === 'error') {
+                setStatus(message || '登录失败。', 'danger');
+                detailText.textContent = message || '登录失败。';
+                return;
+            }
+
+            if (state === 'closed') {
+                setStatus(message || '登录会话已关闭。', 'warning');
+                detailText.textContent = message || '登录会话已关闭。';
+                return;
+            }
+
+            setStatus(message, 'info');
+        } catch (err) {
+            setStatus(`状态轮询失败：${err.message || err}`, 'warning');
+        }
+    }
+
+    try {
+        setStatus('正在连接远程桌面...', 'info');
+        const rfb = new RFB(screen, wsUrl, { shared: true });
+        rfb.viewOnly = false;
+        rfb.scaleViewport = true;
+        rfb.resizeSession = true;
+        rfb.addEventListener('connect', () => setStatus('远程桌面已连接，请在窗口中登录 Truth Social。', 'success'));
+        rfb.addEventListener('disconnect', () => setStatus('远程桌面连接已断开，正在等待重连或会话结束。', 'warning'));
+        rfb.addEventListener('desktopname', (e) => {
+            const name = e.detail && e.detail.name ? e.detail.name : '';
+            if (name) {
+                setStatus(`已连接到 ${name}`, 'success');
+            }
+        });
+        rfb.addEventListener('credentialsrequired', () => setStatus('远程桌面不需要 VNC 密码，等待浏览器登录页加载。', 'info'));
+
+        pollStatus();
+        statusTimer = setInterval(pollStatus, 2000);
+
+        window.addEventListener('beforeunload', function() {
+            if (statusTimer) {
+                clearInterval(statusTimer);
+                statusTimer = null;
+            }
+            try {
+                rfb.disconnect();
+            } catch (err) {
+                console.warn('disconnect failed', err);
+            }
+        });
+    } catch (err) {
+        setStatus(`无法初始化远程桌面：${err.message || err}`, 'danger');
+    }
+</script>
+</body>
+</html>

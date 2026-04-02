@@ -7,21 +7,20 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const contentPageSize = 10
 
 type App struct {
-	store     *PostStore
-	templates map[string]*template.Template
-	gitInfo   GitInfo
+	store          *PostStore
+	templates      map[string]*template.Template
+	gitInfo        GitInfo
+	loginSessions  *LoginSessionManager
 }
 
 func newApp(store *PostStore) (*App, error) {
@@ -32,6 +31,7 @@ func newApp(store *PostStore) (*App, error) {
 		filepath.Join("templates", "ai_config.html"),
 		filepath.Join("templates", "translation_config.html"),
 		filepath.Join("templates", "history.html"),
+		filepath.Join("templates", "login_session.html"),
 	}
 
 	templates := make(map[string]*template.Template, len(files))
@@ -44,9 +44,10 @@ func newApp(store *PostStore) (*App, error) {
 	}
 
 	return &App{
-		store:     store,
-		templates: templates,
-		gitInfo:   getGitCommitInfo(),
+		store:         store,
+		templates:     templates,
+		gitInfo:       getGitCommitInfo(),
+		loginSessions: newLoginSessionManager(),
 	}, nil
 }
 
@@ -72,6 +73,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/message_push/save", a.handleMessagePushSave)
 	mux.HandleFunc("/message_push/test", a.handleMessagePushTest)
 	mux.HandleFunc("/truthsocial/login", a.handleTruthSocialLogin)
+	mux.HandleFunc("/truthsocial/login/session/", a.handleTruthSocialLoginSession)
 	mux.HandleFunc("/config_page", a.handleConfigPage)
 	return mux
 }
@@ -156,40 +158,100 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg, _ := LoadConfig()
-	log.Printf("truthsocial login requested via web ui: username=@%s", cfg.Auth.TruthSocialUsername)
+	username := strings.TrimSpace(r.FormValue("truthsocial_username"))
+	if username == "" {
+		username = strings.TrimSpace(cfg.Auth.TruthSocialUsername)
+	}
+	log.Printf("truthsocial login requested via web ui: username=@%s", username)
 
-	tempProfileDir, err := os.MkdirTemp("", "truthsocial-login-*")
+	session, err := a.loginSessions.Start(username)
 	if err != nil {
-		log.Printf("truthsocial login temp profile create failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
-		return
-	}
-	defer func() {
-		_ = os.RemoveAll(tempProfileDir)
-	}()
-	log.Printf("truthsocial login temp profile: %s", tempProfileDir)
-
-	token, err := fetchBearerTokenWithBrowser(
-		defaultTokenLoginURL,
-		tempProfileDir,
-		defaultTokenTimeoutSeconds*time.Second,
-		defaultTokenPollIntervalSecond*time.Second,
-		true,
-	)
-	if err != nil {
-		log.Printf("truthsocial login failed: %v", err)
+		log.Printf("truthsocial login session start failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
 
-	if err := persistBearerToken(token); err != nil {
-		log.Printf("truthsocial login persist token failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+	log.Printf("truthsocial login session started: id=%s username=@%s display=%d vnc_port=%d debug_port=%d", session.ID, session.Username, session.Display, session.VNCPort, session.DebugPort)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "success",
+		"message":    "远程登录窗口已打开，请在新窗口完成 Truth Social 登录。",
+		"session_id": session.ID,
+		"viewer_url": a.loginSessionViewerURL(r, session.ID),
+		"status_url": a.loginSessionStatusURL(r, session.ID),
+	})
+}
+
+func (a *App) handleTruthSocialLoginSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodConnect {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	log.Printf("truthsocial login token captured via web ui")
-	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "已完成登录并写回 Bearer Token。"})
+	suffix := strings.TrimPrefix(r.URL.Path, "/truthsocial/login/session/")
+	suffix = strings.Trim(suffix, "/")
+	if suffix == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if strings.HasSuffix(suffix, "/status") {
+		id := strings.TrimSuffix(suffix, "/status")
+		id = strings.Trim(id, "/")
+		a.handleTruthSocialLoginSessionStatus(w, r, id)
+		return
+	}
+
+	if strings.HasSuffix(suffix, "/vnc") {
+		id := strings.TrimSuffix(suffix, "/vnc")
+		id = strings.Trim(id, "/")
+		a.handleTruthSocialLoginSessionVNC(w, r, id)
+		return
+	}
+
+	session, ok := a.loginSessions.Get(suffix)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	snapshot := session.Snapshot()
+	message, _ := snapshot["message"].(string)
+	data := LoginSessionPageData{
+		Title:      "Truth Social 登录会话",
+		ActivePage: "config",
+		Git:        a.gitInfo,
+		SessionID:  session.ID,
+		Username:   session.Username,
+		Message:    message,
+	}
+	a.render(w, "login_session.html", data)
+}
+
+func (a *App) handleTruthSocialLoginSessionStatus(w http.ResponseWriter, r *http.Request, sessionID string) {
+	session, ok := a.loginSessions.Get(sessionID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"status": "error", "message": "登录会话不存在或已结束。"})
+		return
+	}
+
+	snapshot := session.Snapshot()
+	if state, ok := snapshot["state"].(string); ok && state != "" {
+		snapshot["status"] = state
+	} else {
+		snapshot["status"] = "running"
+	}
+	snapshot["viewer_url"] = a.loginSessionViewerURL(r, sessionID)
+	snapshot["vnc_url"] = a.loginSessionWebSocketURL(r, sessionID)
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (a *App) handleTruthSocialLoginSessionVNC(w http.ResponseWriter, r *http.Request, sessionID string) {
+	session, ok := a.loginSessions.Get(sessionID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	session.VNCWebSocketHandler(w, r)
 }
 
 func (a *App) handleContent(w http.ResponseWriter, r *http.Request) {
@@ -568,6 +630,42 @@ func (a *App) handleMessagePushTest(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *App) loginSessionBaseURL(r *http.Request) string {
+	scheme := "http"
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = strings.ToLower(strings.Split(proto, ",")[0])
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1:8085"
+	}
+
+	return scheme + "://" + host
+}
+
+func (a *App) loginSessionViewerURL(r *http.Request, sessionID string) string {
+	return a.loginSessionBaseURL(r) + "/truthsocial/login/session/" + url.PathEscape(sessionID)
+}
+
+func (a *App) loginSessionStatusURL(r *http.Request, sessionID string) string {
+	return a.loginSessionBaseURL(r) + "/truthsocial/login/session/" + url.PathEscape(sessionID) + "/status"
+}
+
+func (a *App) loginSessionWebSocketURL(r *http.Request, sessionID string) string {
+	scheme := "ws"
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") || r.TLS != nil {
+		scheme = "wss"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1:8085"
+	}
+	return scheme + "://" + host + "/truthsocial/login/session/" + url.PathEscape(sessionID) + "/vnc"
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

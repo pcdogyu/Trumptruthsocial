@@ -122,6 +122,15 @@ type TranslationConfigPageData struct {
 	TranslationAPIKeyValue string
 }
 
+type LoginSessionPageData struct {
+	Title      string
+	ActivePage string
+	Git        GitInfo
+	SessionID  string
+	Username   string
+	Message    string
+}
+
 type SyncResponse struct {
 	Status   string `json:"status"`
 	Message  string `json:"message"`

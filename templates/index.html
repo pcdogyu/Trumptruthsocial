@@ -259,17 +259,30 @@
             var $button = $(this);
             var originalText = $button.text();
             $button.prop('disabled', true).text('打开中...');
-            setLoginStatus('正在请求后端登录接口，请稍候。', 'info');
+            setLoginStatus('正在启动远程登录窗口，请稍候。', 'info');
+            var loginPopup = window.open('', '_blank', 'width=1440,height=980');
+            if (loginPopup) {
+                try {
+                    loginPopup.document.write('<!doctype html><html><head><title>Truth Social 登录窗口</title><style>body{font-family:sans-serif;margin:2rem;background:#0f172a;color:#e5e7eb;} .card{max-width:720px;margin:auto;background:#111827;padding:1.5rem 1.75rem;border-radius:14px;border:1px solid rgba(255,255,255,.08);box-shadow:0 20px 60px rgba(0,0,0,.35);} .muted{color:#94a3b8;}</style></head><body><div class="card"><h2>正在启动远程登录窗口...</h2><p class="muted">请稍候，窗口加载完成后会自动跳转到 Truth Social 的远程桌面登录页。</p></div></body></html>');
+                    loginPopup.document.close();
+                } catch (err) {}
+            }
 
             loginRequestTimeout = setTimeout(function() {
                 setLoginStatus('登录请求超时，请稍后重试。', 'warning');
                 $button.prop('disabled', false).text(originalText);
+                if (loginPopup && !loginPopup.closed) {
+                    loginPopup.close();
+                }
             }, 5 * 60 * 1000);
 
             $.ajax({
                 url: '/truthsocial/login',
                 type: 'POST',
-                data: { source: 'web-ui' },
+                data: {
+                    source: 'web-ui',
+                    truthsocial_username: $('#truthsocial_username').val()
+                },
                 dataType: 'json',
                 success: function(response) {
                     if (loginRequestTimeout) {
@@ -278,10 +291,19 @@
                     }
 
                     if (response.status === 'success') {
-                        setLoginStatus(response.message || 'Bearer Token 已更新。', 'success');
-                        setTimeout(function() { location.reload(); }, 1500);
+                        setLoginStatus(response.message || '远程登录窗口已打开。', 'success');
+                        if (response.viewer_url) {
+                            if (loginPopup && !loginPopup.closed) {
+                                loginPopup.location = response.viewer_url;
+                            } else {
+                                window.location.href = response.viewer_url;
+                            }
+                        }
                     } else {
                         setLoginStatus(response.message || '登录失败。', 'danger');
+                        if (loginPopup && !loginPopup.closed) {
+                            loginPopup.close();
+                        }
                     }
                 },
                 error: function(xhr) {
@@ -297,6 +319,9 @@
                         errorMsg = xhr.responseText;
                     }
                     setLoginStatus(errorMsg, 'danger');
+                    if (loginPopup && !loginPopup.closed) {
+                        loginPopup.close();
+                    }
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);

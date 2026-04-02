@@ -22,6 +22,8 @@ posts.json
 # PEM keys / certificates
 /pem/
 *.pem
+truthsocial_login_session.json
+.chrome-token-profile/
 
 # Go runtime artifacts and logs
 go.log
