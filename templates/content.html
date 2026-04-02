@@ -275,9 +275,7 @@
 
         $('.col-md-9').on('click', '.delete-btn', function() {
             var postId = $(this).data('post-id');
-            if (confirm('您确定要从本地数据库中删除帖子 ' + postId + ' 吗？这将允许系统在下次同步时重新抓取它。')) {
-                postAction('/delete_post', postId, 'success', '删除帖子', true);
-            }
+            postAction('/delete_post', postId, 'success', '删除帖子', true);
         });
 
         $('.col-md-9').on('click', '.block-btn', function() {
