@@ -7,7 +7,7 @@ import (
 )
 
 const telegramSendGap = 8 * time.Second
-const historicalTelegramSendGap = 15 * time.Second
+const historicalTelegramSendGap = 20 * time.Second
 
 func parseDuration(interval string) time.Duration {
 	interval = strings.TrimSpace(interval)
