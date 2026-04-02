@@ -1,5 +1,15 @@
 # TruthSocial Monitor
 
+## Go 版说明
+
+当前 `golang` 分支已经加入 Go 版实现。启动方式是：
+
+```bash
+go run .
+```
+
+Go 版保留了原有页面和路由语义，配置仍读取 `config.yaml`，帖子数据改为本地 `posts.json` 持久化。
+
 A Python-based tool to monitor user accounts on Truth Social for new posts and send real-time notifications to a Telegram chat. It includes a web-based UI for easy configuration and viewing post history.
 
 ---
