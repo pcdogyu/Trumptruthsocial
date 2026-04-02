@@ -1171,43 +1171,71 @@ func isCloudflareBlock(page string) bool {
 
 func findChromeExecPath() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("TRUTHSOCIAL_CHROME_PATH")); override != "" {
-		if _, err := os.Stat(override); err == nil {
-			return override, nil
+		if resolved, err := resolveChromeCandidate(override); err == nil {
+			return resolved, nil
 		}
 	}
 
 	candidates := []string{
 		"google-chrome",
 		"google-chrome-stable",
+		"google-chrome-beta",
+		"google-chrome-unstable",
+		"chrome",
 		"chromium",
 		"chromium-browser",
+		"chromium-chromedriver",
+		"brave-browser",
+		"brave",
+		"vivaldi",
 		"microsoft-edge",
 		"msedge",
 		"/usr/bin/google-chrome",
 		"/usr/bin/google-chrome-stable",
+		"/usr/bin/google-chrome-beta",
+		"/usr/bin/google-chrome-unstable",
+		"/usr/bin/chrome",
 		"/usr/bin/chromium",
 		"/usr/bin/chromium-browser",
-		"/snap/bin/chromium",
+		"/usr/bin/brave-browser",
+		"/usr/bin/brave",
+		"/usr/bin/vivaldi",
 		"/usr/bin/microsoft-edge",
 		"/usr/bin/msedge",
+		"/snap/bin/chromium",
+		"/opt/google/chrome/google-chrome",
+		"/opt/google/chrome/chrome",
+		"/usr/local/bin/google-chrome",
+		"/usr/local/bin/chromium",
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 	}
-	for _, path := range candidates {
-		if strings.Contains(path, string(os.PathSeparator)) || strings.Contains(path, `\`) {
-			if _, err := os.Stat(path); err == nil {
-				return path, nil
-			}
-			continue
-		}
-		if resolved, err := exec.LookPath(path); err == nil {
+	tried := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		resolved, err := resolveChromeCandidate(candidate)
+		if err == nil {
 			return resolved, nil
 		}
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
+		tried = append(tried, candidate)
 	}
-	return "", fmt.Errorf("no Chrome/Edge executable found")
+	return "", fmt.Errorf("no Chrome/Edge executable found; tried %s; set TRUTHSOCIAL_CHROME_PATH to the full browser path", strings.Join(tried, ", "))
+}
+
+func resolveChromeCandidate(candidate string) (string, error) {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return "", fmt.Errorf("empty browser path")
+	}
+	if strings.Contains(candidate, string(os.PathSeparator)) || strings.Contains(candidate, `\`) {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		return "", fmt.Errorf("browser path not found: %s", candidate)
+	}
+	if resolved, err := exec.LookPath(candidate); err == nil {
+		return resolved, nil
+	}
+	return "", fmt.Errorf("browser command not found: %s", candidate)
 }
