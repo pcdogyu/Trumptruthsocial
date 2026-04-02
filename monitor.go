@@ -7,6 +7,7 @@ import (
 )
 
 const telegramSendGap = 8 * time.Second
+const historicalTelegramSendGap = 15 * time.Second
 
 func parseDuration(interval string) time.Duration {
 	interval = strings.TrimSpace(interval)
@@ -74,7 +75,7 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 			}
 		}
 	}
-	forwardUnsentPosts(store, cfg)
+	forwardUnsentPostsWithGap(store, cfg, historicalTelegramSendGap)
 	return added, nil
 }
 
@@ -108,7 +109,7 @@ func syncLatestAccounts(store *PostStore) (int, error) {
 			added++
 		}
 	}
-	forwardUnsentPosts(store, cfg)
+	forwardUnsentPostsWithGap(store, cfg, telegramSendGap)
 	return added, nil
 }
 
@@ -147,7 +148,7 @@ func runMonitor(store *PostStore) {
 				}
 			}
 		}
-		forwardUnsentPosts(store, cfg)
+		forwardUnsentPostsWithGap(store, cfg, telegramSendGap)
 
 		log.Printf("监控周期结束，休眠 %s", interval)
 		time.Sleep(interval)
@@ -155,8 +156,16 @@ func runMonitor(store *PostStore) {
 }
 
 func forwardUnsentPosts(store *PostStore, cfg Config) {
+	forwardUnsentPostsWithGap(store, cfg, telegramSendGap)
+}
+
+func forwardUnsentPostsWithGap(store *PostStore, cfg Config, gap time.Duration) {
 	if cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" || strings.Contains(cfg.Telegram.BotToken, "YOUR_TELEGRAM_BOT_TOKEN") {
 		return
+	}
+
+	if gap <= 0 {
+		gap = telegramSendGap
 	}
 
 	unsent := store.GetUnsentPosts()
@@ -169,7 +178,7 @@ func forwardUnsentPosts(store *PostStore, cfg Config) {
 		} else {
 			log.Printf("telegram send failed for %s: %s", post.ID, message)
 		}
-		time.Sleep(telegramSendGap)
+		time.Sleep(gap)
 	}
 }
 
