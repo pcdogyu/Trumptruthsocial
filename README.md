@@ -24,7 +24,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **AI Configuration Page**: Dedicated page in the Web UI for managing AI analysis settings, including API key and prompt.
 *   **Configurable Web Selectors**: CSS selectors used for scraping can now be configured in `config.yaml`, making the tool more resilient to website structure changes.
 *   **Authenticated Fetching**: Uses a Bearer Token to access content that may require authentication.
-*   **Token Helper**: Includes a script (`get_token.py`) to easily extract the Bearer Token from your browser after logging in.
+*   **Token Helper**: Includes a script (`get_token.py`) that opens a browser, waits for login, and writes the Bearer Token back to `config.yaml`.
 *   **Content Viewer**: A dedicated Web UI page to browse historical posts from monitored accounts.
 *   **Historical Sync**: A button in the Web UI to trigger a manual synchronization of recent (e.g., last 7 days) posts for all monitored accounts, using a more robust Selenium-based scraping method to fetch dynamically loaded content.
 *   **Post History**: Stores a history of all fetched posts in a local SQLite database.
@@ -52,7 +52,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 
 3.  **Configure the application:**
     *   Copy `config.yaml.example` to `config.yaml` (If the example file exists).
-    *   **Get Bearer Token**: Run `python get_token.py`. This will open a Chrome browser. Log in to Truth Social manually. The script will automatically extract the token and print it to the console.
+    *   **Get Bearer Token**: Run `python get_token.py`. This will open a Chrome browser. Log in to Truth Social manually if needed. After login, the script will automatically extract the token and write it back to `config.yaml`.
     *   **Fill `config.yaml`** (or use the Web UI later):
         *   `auth`: Paste the `bearer_token` you obtained.
         *   `telegram`: Telegram `bot_token` and `chat_id` are now configured via the "消息推送" (Message Push) page in the Web UI.
@@ -88,7 +88,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 *   **AI 配置页面**: Web UI 中新增专用页面，用于管理 AI 分析设置，包括 API 密钥和提示词。
 *   **可配置的网页选择器**: 用于网页抓取的 CSS 选择器现在可以在 `config.yaml` 中配置，使工具更能适应网站结构的变化。
 *   **认证抓取**: 使用 Bearer Token 获取需要登录才能查看的内容。
-*   **Token 获取助手**: 包含一个辅助脚本 (`get_token.py`)，可以在您登录后轻松从浏览器中提取 Bearer Token。
+*   **Token 获取助手**: 包含一个辅助脚本 (`get_token.py`)，会在您登录后自动从浏览器中提取 Bearer Token，并写回 `config.yaml`。
 *   **内容查看器**: 一个专门的 Web UI 页面，用于浏览监控账户的历史帖子。
 *   **历史同步**: Web UI 中增加一个按钮，可以手动触发所有监控账户最近（例如，最近7天）帖子的同步。此功能现在使用更健壮的基于 Selenium 的抓取方法，能够获取动态加载的历史内容。
 *   **历史记录**: 将所有抓取到的帖子历史记录保存在本地 SQLite 数据库中。
@@ -116,7 +116,7 @@ A Python-based tool to monitor user accounts on Truth Social for new posts and s
 
 3.  **配置程序:**
     *   将 `config.yaml.example` 复制为 `config.yaml` (如果示例文件存在)。
-    *   **获取 Bearer Token**: 运行 `python get_token.py`。脚本会打开一个 Chrome 浏览器，请手动登录 Truth Social。登录成功后，脚本会自动提取 Token 并打印在命令行中。
+    *   **获取 Bearer Token**: 运行 `python get_token.py`。脚本会打开一个 Chrome 浏览器，请手动登录 Truth Social。登录成功后，脚本会自动提取 Token，并写回 `config.yaml`。
     *   **填写 `config.yaml`** (或稍后通过 Web UI 配置):
         *   `auth`: 粘贴你获取到的 `bearer_token`。
         *   `telegram`: Telegram 的 `bot_token` 和 `chat_id` 现在通过 Web UI 中的“消息推送”页面进行配置。

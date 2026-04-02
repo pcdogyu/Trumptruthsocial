@@ -1,97 +1,138 @@
-import time
+import argparse
 import json
 import logging
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import config_manager
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+DEFAULT_LOGIN_URL = "https://truthsocial.com/login"
+DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_POLL_INTERVAL_SECONDS = 1
+DEFAULT_PROFILE_DIR = Path(".chrome-token-profile")
 
-def get_auth_token():
-    """
-    启动一个浏览器实例，让用户手动登录，然后从 localStorage 提取 Bearer Token。
-    """
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def build_driver(profile_dir: Path) -> webdriver.Chrome:
     service = Service(ChromeDriverManager().install())
     options = Options()
-    # 忽略不相关的日志消息
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
+    options.add_argument(f"--user-data-dir={profile_dir.resolve()}")
+    return webdriver.Chrome(service=service, options=options)
+
+
+def extract_access_token(driver) -> Optional[str]:
+    """从 Truth Social 登录后的 localStorage 中提取 access_token。"""
+    try:
+        auth_data_str = driver.execute_script("return localStorage.getItem('truth:auth');")
+        if not auth_data_str:
+            return None
+
+        auth_data = json.loads(auth_data_str)
+        users = auth_data.get("users") if isinstance(auth_data, dict) else None
+        if not isinstance(users, dict):
+            return None
+
+        for user_info in users.values():
+            if not isinstance(user_info, dict):
+                continue
+            access_token = user_info.get("access_token")
+            if access_token:
+                return access_token
+    except Exception:
+        return None
+    return None
+
+
+def mask_token(token: str) -> str:
+    token = token.strip()
+    if len(token) <= 12:
+        return token
+    return f"{token[:6]}...{token[-4:]}"
+
+
+def save_token_to_config(token: str) -> None:
+    config = config_manager.load_config()
+    auth = config.setdefault("auth", {})
+    auth["bearer_token"] = token
+    config_manager.save_config(config)
+    logging.info("Bearer Token 已写回 config.yaml")
+
+
+def wait_for_token(driver, timeout_seconds: int, poll_interval_seconds: int) -> Optional[str]:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        access_token = extract_access_token(driver)
+        if access_token:
+            return access_token
+        time.sleep(poll_interval_seconds)
+    return None
+
+
+def run() -> int:
+    parser = argparse.ArgumentParser(
+        description="打开 Truth Social 登录页，等待登录后自动抓取 Bearer Token 并写回 config.yaml。"
+    )
+    parser.add_argument("--login-url", default=DEFAULT_LOGIN_URL, help="Truth Social 登录地址")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="最长等待登录的秒数")
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=DEFAULT_POLL_INTERVAL_SECONDS,
+        help="轮询 localStorage 的间隔秒数",
+    )
+    parser.add_argument(
+        "--profile-dir",
+        default=str(DEFAULT_PROFILE_DIR),
+        help="Chrome 用户数据目录。用于保留登录态，便于下次自动抓取。",
+    )
+    parser.add_argument(
+        "--print-token",
+        action="store_true",
+        help="同时在控制台打印完整 Token。默认只输出脱敏结果。",
+    )
+    args = parser.parse_args()
+
+    profile_dir = Path(args.profile_dir)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
     driver = None
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        
-        # 打开登录页面
-        driver.get("https://truthsocial.com/login")
-        
-        logging.info("="*60)
-        logging.info("浏览器窗口已打开。请在该窗口中手动完成登录操作。")
-        logging.info("登录成功后，脚本将自动检测并提取 Token。")
-        logging.info("="*60)
+        driver = build_driver(profile_dir)
+        driver.get(args.login_url)
 
-        access_token = None
-        # 循环检查 localStorage，直到找到 token 为止
-        for i in range(120): # 最多等待 2 分钟
-            try:
-                # Truth Social 将认证状态存储在名为 'truth:auth' 的 localStorage 项中
-                auth_data_str = driver.execute_script("return localStorage.getItem('truth:auth');")
-                if auth_data_str:
-                    auth_data = json.loads(auth_data_str)
-                    users = auth_data.get('users')
-                    # 确保 'users' 是一个非空字典
-                    if users and isinstance(users, dict) and len(users) > 0:
-                        # 获取字典中的第一个用户对象 (通常只有一个)
-                        first_user_key = next(iter(users))
-                        user_info = users.get(first_user_key)
-                        if user_info and isinstance(user_info, dict):
-                            access_token = user_info.get('access_token')
-                            if access_token:
-                                logging.info("成功从 localStorage 中提取到 Token！")
-                                break
-            except Exception as e:
-                # 忽略解析错误，因为在登录过程中 localStorage 的状态可能会暂时不一致
-                pass
-            time.sleep(1)
+        logging.info("=" * 60)
+        logging.info("浏览器窗口已打开。请在该窗口中登录 Truth Social。")
+        logging.info("登录后脚本会自动检测 localStorage 并写回 Bearer Token。")
+        logging.info("如果你已经登录过，脚本可能会在几秒内直接完成。")
+        logging.info("=" * 60)
 
-        if access_token:
-            print("\n" + "="*20 + "  Authorization Token  " + "="*20)
+        access_token = wait_for_token(driver, args.timeout, args.poll_interval)
+        if not access_token:
+            logging.error("在 %s 秒内未检测到 Token。请确认已经完成登录。", args.timeout)
+            return 1
+
+        save_token_to_config(access_token)
+        logging.info("已获取 Bearer Token: %s", mask_token(access_token))
+        if args.print_token:
             print(f"\nBearer Token: {access_token}\n")
-            print("="*65)
-            print("\n请将此 Token 复制到您的 config.yaml 文件或 Web UI 的 'Bearer Token' 字段中。")
-            # 成功获取后等待用户确认，避免窗口立刻关闭
-            input("Token 已打印在上方。按 Enter 键关闭浏览器...")
-        else:
-            logging.error("在超时时间内未能获取到 Token。请确保您已成功登录。")
-            logging.info("将打印浏览器存储内容以供调试...")
-            try:
-                # 打印 localStorage
-                local_storage = driver.execute_script("return window.localStorage;")
-                print("\n--- localStorage 内容 ---")
-                if local_storage:
-                    for key, value in local_storage.items():
-                        print(f"  Key: {key}")
-                        # 尝试美化打印JSON
-                        try:
-                            parsed_value = json.loads(value)
-                            print(f"  Value (JSON):\n{json.dumps(parsed_value, indent=2, ensure_ascii=False)}")
-                        except (json.JSONDecodeError, TypeError):
-                            print(f"  Value (Raw): {str(value)[:500]}...") # 截断过长的值
-                        print("-" * 20)
-                else:
-                    print("localStorage 为空。")
-
-                print("\n请检查以上输出，寻找类似 'token', 'auth', 'session' 的键，并将其内容分享出来以便分析。")
-                input("调试信息已打印。按 Enter 键关闭浏览器...")
-
-            except Exception as debug_e:
-                logging.error(f"尝试打印存储内容时出错: {debug_e}")
-
+        return 0
+    except WebDriverException as exc:
+        logging.error("启动浏览器失败: %s", exc)
+        return 1
     finally:
         if driver:
             driver.quit()
             logging.info("浏览器已关闭。")
 
+
 if __name__ == "__main__":
-    get_auth_token()
+    sys.exit(run())
