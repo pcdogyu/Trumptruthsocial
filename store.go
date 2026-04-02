@@ -85,6 +85,29 @@ func (s *PostStore) AddPost(post Post) (bool, error) {
 	return true, s.saveLocked()
 }
 
+func (s *PostStore) UpsertPost(post Post) (bool, error) {
+	if post.ID == "" {
+		return false, errors.New("post id is empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, exists := s.Posts[post.ID]
+	post.Timestamp = normalizeTimeString(post.Timestamp)
+	if exists {
+		post = mergePost(existing, post)
+		if post == existing {
+			return false, nil
+		}
+	}
+	if post.Status == "" {
+		post.Status = PostStatusNormal
+	}
+	s.Posts[post.ID] = post
+	return !exists, s.saveLocked()
+}
+
 func (s *PostStore) DeletePost(postID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,6 +136,25 @@ func (s *PostStore) MarkSent(postID string) (bool, error) {
 		return false, nil
 	}
 	post.SentToTelegram = true
+	s.Posts[postID] = post
+	return true, s.saveLocked()
+}
+
+func (s *PostStore) UpdatePostTranslation(postID, translatedContent, translatedAt, translationError string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	post, ok := s.Posts[postID]
+	if !ok {
+		return false, nil
+	}
+
+	post.TranslatedContent = strings.TrimSpace(translatedContent)
+	post.TranslatedAt = strings.TrimSpace(translatedAt)
+	post.TranslationError = strings.TrimSpace(translationError)
+	if post == s.Posts[postID] {
+		return true, nil
+	}
 	s.Posts[postID] = post
 	return true, s.saveLocked()
 }
@@ -278,4 +320,50 @@ func normalizeStatus(status string) string {
 	default:
 		return PostStatusNormal
 	}
+}
+
+func mergePost(existing, incoming Post) Post {
+	merged := existing
+	if incoming.Username != "" {
+		merged.Username = incoming.Username
+	}
+	if incoming.Content != "" {
+		merged.Content = incoming.Content
+	}
+	if incoming.TranslatedContent != "" {
+		merged.TranslatedContent = incoming.TranslatedContent
+	}
+	if incoming.TranslatedAt != "" {
+		merged.TranslatedAt = incoming.TranslatedAt
+	}
+	if incoming.TranslationError != "" {
+		merged.TranslationError = incoming.TranslationError
+	} else if incoming.TranslatedContent != "" {
+		merged.TranslationError = ""
+	}
+	if incoming.WebURL != "" {
+		merged.WebURL = incoming.WebURL
+	}
+	if incoming.ImageURL != "" {
+		merged.ImageURL = incoming.ImageURL
+	}
+	if incoming.VideoURL != "" {
+		merged.VideoURL = incoming.VideoURL
+	}
+	if incoming.Timestamp != "" {
+		merged.Timestamp = incoming.Timestamp
+	}
+	if incoming.RawData != "" {
+		merged.RawData = incoming.RawData
+	}
+	if incoming.Status != "" {
+		merged.Status = normalizeStatus(incoming.Status)
+	}
+	if existing.Status == PostStatusBlocked || incoming.Status == PostStatusBlocked {
+		merged.Status = PostStatusBlocked
+	}
+	if incoming.SentToTelegram || existing.SentToTelegram {
+		merged.SentToTelegram = true
+	}
+	return merged
 }

@@ -44,16 +44,19 @@ type Config struct {
 }
 
 type Post struct {
-	ID             string `json:"id"`
-	Username       string `json:"username"`
-	Content        string `json:"content"`
-	WebURL         string `json:"web_url"`
-	ImageURL       string `json:"image_url"`
-	VideoURL       string `json:"video_url"`
-	Timestamp      string `json:"timestamp"`
-	Status         string `json:"status"`
-	RawData        string `json:"raw_data,omitempty"`
-	SentToTelegram bool   `json:"sent_to_telegram"`
+	ID                string `json:"id"`
+	Username          string `json:"username"`
+	Content           string `json:"content"`
+	TranslatedContent string `json:"translated_content,omitempty"`
+	TranslatedAt      string `json:"translated_at,omitempty"`
+	TranslationError  string `json:"translation_error,omitempty"`
+	WebURL            string `json:"web_url"`
+	ImageURL          string `json:"image_url"`
+	VideoURL          string `json:"video_url"`
+	Timestamp         string `json:"timestamp"`
+	Status            string `json:"status"`
+	RawData           string `json:"raw_data,omitempty"`
+	SentToTelegram    bool   `json:"sent_to_telegram"`
 }
 
 type GitInfo struct {

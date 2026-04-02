@@ -63,9 +63,11 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 		}
 		debugf("historical sync fetched account=%s posts=%d", profileURL, len(posts))
 		for _, post := range posts {
-			ok, err := store.AddPost(post)
+			hydratePostTranslationFromStore(store, &post)
+			enrichPostTranslation(cfg, &post, false)
+			ok, err := store.UpsertPost(post)
 			if err != nil {
-				log.Printf("store add post failed: %v", err)
+				log.Printf("store upsert post failed: %v", err)
 				continue
 			}
 			if ok {
@@ -102,15 +104,18 @@ func syncLatestAccounts(store *PostStore) (int, error) {
 		if len(posts) == 0 {
 			continue
 		}
-		ok, err := store.AddPost(posts[0])
+		post := posts[0]
+		hydratePostTranslationFromStore(store, &post)
+		enrichPostTranslation(cfg, &post, false)
+		ok, err := store.UpsertPost(post)
 		if err != nil {
-			log.Printf("store add latest post failed: %v", err)
+			log.Printf("store upsert latest post failed: %v", err)
 			continue
 		}
 		if ok {
 			added++
 		}
-		if stored, exists := store.GetPostByID(posts[0].ID); exists && stored.Status != PostStatusBlocked && !stored.SentToTelegram {
+		if stored, exists := store.GetPostByID(post.ID); exists && stored.Status != PostStatusBlocked && !stored.SentToTelegram {
 			latestPosts = append(latestPosts, stored)
 		}
 	}
@@ -150,8 +155,10 @@ func runMonitor(store *PostStore) {
 				continue
 			}
 			for _, post := range posts {
-				if _, err := store.AddPost(post); err != nil {
-					log.Printf("add post failed for %s: %v", post.ID, err)
+				hydratePostTranslationFromStore(store, &post)
+				enrichPostTranslation(cfg, &post, false)
+				if _, err := store.UpsertPost(post); err != nil {
+					log.Printf("upsert post failed for %s: %v", post.ID, err)
 				}
 			}
 		}
@@ -235,20 +242,7 @@ func htmlEscape(value string) string {
 }
 
 func buildMediaFallbackText(post Post) string {
-	text := "<b>来自: @" + htmlEscape(post.Username) + "</b>\n\n"
-	if strings.TrimSpace(post.Content) != "" {
-		text += htmlEscape(post.Content) + "\n\n"
-	}
-	if strings.TrimSpace(post.ImageURL) != "" {
-		text += htmlEscape(post.ImageURL) + "\n\n"
-	}
-	if strings.TrimSpace(post.VideoURL) != "" {
-		text += htmlEscape(post.VideoURL) + "\n\n"
-	}
-	if strings.TrimSpace(post.WebURL) != "" {
-		text += "<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
-	}
-	return text
+	return buildTelegramHTMLPost(post, 0, true)
 }
 
 func buildVideoFallbackText(post Post) string {

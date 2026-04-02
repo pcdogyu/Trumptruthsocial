@@ -39,7 +39,7 @@ func defaultConfig() Config {
 			SourceLanguage: "auto",
 			TargetLanguage: "zh-CN",
 			TimeoutSeconds: 30,
-			Prompt:         "Translate the following text into the target language, preserving meaning and tone:",
+			Prompt:         defaultTranslationPrompt,
 		},
 		RefreshInterval: "5m",
 		Selectors: map[string]string{

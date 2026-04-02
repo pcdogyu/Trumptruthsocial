@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -13,8 +12,7 @@ import (
 	"time"
 )
 
-const upgradeTransientUnitName = "truthsocial-upgrade"
-const upgradeTransientServiceName = upgradeTransientUnitName + ".service"
+const upgradeServiceName = "truthsocial-upgrade.service"
 const upgradeLogFileName = "upgrade.log"
 
 func (a *App) handleUpgrade(w http.ResponseWriter, r *http.Request) {
@@ -114,54 +112,23 @@ func (a *App) handleUpgradeLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func launchUpgradeJob(scriptPath string) error {
-	systemdRun, err := resolveSystemdRunPath()
+	systemctl, err := exec.LookPath("systemctl")
 	if err != nil {
-		return err
+		return fmt.Errorf("未找到 systemctl，请确认服务器已安装 systemd")
 	}
 
 	workDir := filepath.Dir(scriptPath)
-	cmd := exec.Command(
-		systemdRun,
-		"--no-block",
-		"--unit="+upgradeTransientUnitName,
-		"--property=Type=oneshot",
-		"--property=WorkingDirectory="+workDir,
-		"/bin/bash",
-		scriptPath,
-	)
-	cmd.Stdin = nil
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	if err := cmd.Run(); err != nil {
-		text := strings.TrimSpace(output.String())
+	cmd := exec.Command(systemctl, "start", "--no-block", upgradeServiceName)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(output))
 		if text != "" {
-			return fmt.Errorf("systemd-run 启动升级任务失败: %w: %s", err, text)
+			return fmt.Errorf("启动升级服务失败: %w: %s", err, text)
 		}
-		return fmt.Errorf("systemd-run 启动升级任务失败: %w", err)
+		return fmt.Errorf("启动升级服务失败: %w", err)
 	}
 	return nil
-}
-
-func resolveSystemdRunPath() (string, error) {
-	candidates := []string{
-		"systemd-run",
-		"/usr/bin/systemd-run",
-		"/bin/systemd-run",
-		"/usr/sbin/systemd-run",
-	}
-	for _, candidate := range candidates {
-		if filepath.IsAbs(candidate) {
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				return candidate, nil
-			}
-			continue
-		}
-		if path, err := exec.LookPath(candidate); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("未找到 systemd-run，请确认服务器已安装 systemd")
 }
 
 func resolveUpgradeScriptPath() (string, error) {
@@ -206,9 +173,10 @@ func upgradeJobRunning() bool {
 	if err != nil {
 		return false
 	}
-	out, err := exec.Command(systemctl, "is-active", upgradeTransientServiceName).CombinedOutput()
+	out, err := exec.Command(systemctl, "is-active", upgradeServiceName).CombinedOutput()
 	if err == nil {
-		return strings.TrimSpace(string(out)) == "active"
+		state := strings.TrimSpace(string(out))
+		return state == "active" || state == "activating"
 	}
 	state := strings.TrimSpace(string(out))
 	return state == "active" || state == "activating"

@@ -59,7 +59,7 @@ To use the in-app upgrade button, the server must also have `git` and `go` insta
 The upgrade flow is:
 
 1. Click `升级` on the content page.
-2. The app starts `upgrade.sh` through `systemd-run`.
+2. The app starts the dedicated `truthsocial-upgrade.service`.
 3. `upgrade.sh` runs `git pull --ff-only origin golang`.
 4. `upgrade.sh` runs `go build -o truthsocial.exe .`.
 5. `upgrade.sh` runs `systemctl restart truthsocial.service`.
@@ -74,6 +74,7 @@ The upgrade flow is:
 - `auth.bearer_token_validity_days` defaults to 5.
 - `auth.bearer_token_backup_1` and `auth.bearer_token_backup_2` store the previous two tokens.
 - `translation.api_url`, `translation.api_key`, `translation.model`, `translation.source_language`, `translation.target_language`, and `translation.timeout_seconds` are saved in the new translation settings page.
+- When translation is enabled, new posts are translated during sync, stored alongside the original text, and reused in the content page and Telegram messages.
 - The content page shows pagination with 10 posts per page.
 - The token display in the UI is masked with 10 asterisks in the middle.
 
@@ -124,7 +125,7 @@ sudo bash scripts/install-systemd.sh
 升级流程：
 
 1. 在内容页点击 `升级`
-2. 程序通过 `systemd-run` 拉起 `upgrade.sh`
+2. 程序通过独立的 `truthsocial-upgrade.service` 拉起 `upgrade.sh`
 3. `upgrade.sh` 执行 `git pull --ff-only origin golang`
 4. `upgrade.sh` 执行 `go build -o truthsocial.exe .`
 5. `upgrade.sh` 执行 `systemctl restart truthsocial.service`
@@ -139,5 +140,5 @@ sudo bash scripts/install-systemd.sh
 - 启动时会自动检查 Bearer Token 是否过期。
 - 过期后会自动打开浏览器抓取新 token，并写回 `config.yaml`。
 - 会保留最近 3 个 Bearer Token，便于自动回退。
-- 翻译设置在顶部菜单的 `翻译设置` 中配置，保存后会写回 `config.yaml`。
+- 翻译设置在顶部菜单的 `翻译设置` 中配置，保存后会写回 `config.yaml`；启用后同步帖子时会自动生成译文并保留原文。
 - 内容页默认每页 10 条，并在表格上下都显示分页组件。

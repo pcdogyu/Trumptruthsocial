@@ -56,13 +56,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 	}
 
 	if imageURL != "" && !shouldSendTelegramVideo(imageURL) {
-		caption := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
-		if strings.TrimSpace(post.Content) != "" {
-			caption += html.EscapeString(post.Content) + "\n\n"
-		}
-		if strings.TrimSpace(post.WebURL) != "" {
-			caption += "<a href='" + html.EscapeString(post.WebURL) + "'>查看原文</a>"
-		}
+		caption := buildTelegramHTMLPost(post, 220, false)
 		ok, message := sendTelegramPhoto(cfg, imageURL, caption)
 		if ok {
 			return true, message
@@ -72,13 +66,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 	}
 
 	if shouldSendTelegramVideo(videoURL) {
-		caption := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
-		if strings.TrimSpace(post.Content) != "" {
-			caption += html.EscapeString(post.Content) + "\n\n"
-		}
-		if strings.TrimSpace(post.WebURL) != "" {
-			caption += "<a href='" + html.EscapeString(post.WebURL) + "'>查看原文</a>"
-		}
+		caption := buildTelegramHTMLPost(post, 220, false)
 		ok, message := sendTelegramVideo(cfg, videoURL, caption)
 		if ok {
 			return true, message
@@ -94,14 +82,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 		return sendTelegramHTMLMessage(cfg, buildMediaFallbackText(post))
 	}
 
-	text := fmt.Sprintf("<b>来自: @%s</b>\n\n", html.EscapeString(post.Username))
-	if strings.TrimSpace(post.Content) != "" {
-		text += html.EscapeString(post.Content) + "\n\n"
-	}
-	if strings.TrimSpace(post.WebURL) != "" {
-		text += fmt.Sprintf("<a href='%s'>查看原文</a>", html.EscapeString(post.WebURL))
-	}
-	return sendTelegramHTMLMessage(cfg, text)
+	return sendTelegramHTMLMessage(cfg, buildTelegramHTMLPost(post, 0, false))
 }
 
 func sendTelegramTestMessage(cfg Config) (bool, string) {
@@ -846,13 +827,66 @@ func extractYouTubeURL(text string) string {
 }
 
 func buildYouTubeTelegramText(post Post, youtubeURL string) string {
-	title := cleanTelegramContent(post.Content)
-	text := "来自: @" + post.Username + "\n\n"
-	if title != "" {
-		text += title + "\n\n"
+	original := cleanTelegramContent(post.Content)
+	translated := cleanTelegramContent(post.TranslatedContent)
+	text := "来自: @" + post.Username + "\n"
+	if original != "" {
+		text += "\n原文:\n" + original + "\n"
 	}
-	text += youtubeURL
-	return text
+	if translated != "" {
+		text += "\n译文:\n" + translated + "\n"
+	}
+	if strings.TrimSpace(post.WebURL) != "" {
+		text += "\n原文链接:\n" + post.WebURL + "\n"
+	}
+	text += "\n" + youtubeURL
+	return strings.TrimSpace(text)
+}
+
+func buildTelegramHTMLPost(post Post, maxContentRunes int, includeMediaURLs bool) string {
+	var b strings.Builder
+	b.WriteString("<b>来自: @")
+	b.WriteString(html.EscapeString(post.Username))
+	b.WriteString("</b>")
+
+	original := trimTelegramText(post.Content, maxContentRunes)
+	translated := trimTelegramText(post.TranslatedContent, maxContentRunes)
+	if original != "" {
+		b.WriteString("\n\n<b>原文</b>\n")
+		b.WriteString(html.EscapeString(original))
+	}
+	if translated != "" {
+		b.WriteString("\n\n<b>译文</b>\n")
+		b.WriteString(html.EscapeString(translated))
+	}
+	if includeMediaURLs {
+		if strings.TrimSpace(post.ImageURL) != "" {
+			b.WriteString("\n\n<b>图片</b>\n")
+			b.WriteString(html.EscapeString(post.ImageURL))
+		}
+		if strings.TrimSpace(post.VideoURL) != "" {
+			b.WriteString("\n\n<b>视频</b>\n")
+			b.WriteString(html.EscapeString(post.VideoURL))
+		}
+	}
+	if strings.TrimSpace(post.WebURL) != "" {
+		b.WriteString("\n\n<a href='")
+		b.WriteString(html.EscapeString(post.WebURL))
+		b.WriteString("'>查看原文</a>")
+	}
+	return b.String()
+}
+
+func trimTelegramText(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxRunes <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func cleanTelegramContent(content string) string {

@@ -168,11 +168,27 @@
                             {{else}}
                             <span class="badge badge-secondary">未发送</span>
                             {{end}}
+                            {{if .TranslatedContent}}
+                            <span class="badge badge-info">已翻译</span>
+                            {{else if .TranslationError}}
+                            <span class="badge badge-warning">译文失败</span>
+                            {{end}}
                         </div>
                         <span class="text-muted">{{.Timestamp}}</span>
                     </div>
                     <div class="card-body">
                         <p class="card-text">{{.Content}}</p>
+                        {{if .TranslatedContent}}
+                        <div class="alert alert-light border mt-3 mb-2">
+                            <div class="text-muted small mb-1">译文</div>
+                            <p class="card-text mb-0">{{.TranslatedContent}}</p>
+                        </div>
+                        {{else if .TranslationError}}
+                        <div class="alert alert-warning mt-3 mb-2">
+                            <div class="text-muted small mb-1">译文失败</div>
+                            <p class="card-text mb-0">{{.TranslationError}}</p>
+                        </div>
+                        {{end}}
                         {{if .ImageURL}}
                         <a href="{{.ImageURL}}" target="_blank">
                             <img src="{{.ImageURL}}" alt="post image" class="post-image">

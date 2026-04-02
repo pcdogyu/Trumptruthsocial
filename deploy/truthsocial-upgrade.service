@@ -1,0 +1,9 @@
+[Unit]
+Description=TruthSocial Upgrade Job
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/Trumptruthsocial
+ExecStart=/bin/bash /opt/Trumptruthsocial/upgrade.sh

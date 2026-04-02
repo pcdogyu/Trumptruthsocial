@@ -304,6 +304,12 @@ func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, _ := LoadConfig()
+	enrichPostTranslation(cfg, &post, true)
+	if post.TranslatedAt != "" || post.TranslationError != "" {
+		if _, err := a.store.UpdatePostTranslation(post.ID, post.TranslatedContent, post.TranslatedAt, post.TranslationError); err != nil {
+			log.Printf("persist translation failed for %s: %v", post.ID, err)
+		}
+	}
 	success, message := forwardPostToTelegram(cfg, post)
 	if success {
 		if updated, err := a.store.MarkSent(postID); err != nil {
@@ -466,6 +472,9 @@ func (a *App) handleSaveTranslationConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 	log.Printf("translation config saved")
+	if cfg.Translation.Enabled {
+		go backfillStoredTranslations(a.store)
+	}
 	http.Redirect(w, r, "/translation_config?saved=1", http.StatusSeeOther)
 }
 
