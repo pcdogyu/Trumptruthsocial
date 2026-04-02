@@ -456,7 +456,10 @@ func readTokenAndCookiesFromRemoteBrowser(debugURL, loginURL string) (string, []
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), debugURL)
 	defer allocCancel()
 
-	targets, err := chromedp.Targets(allocCtx)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+
+	targets, err := chromedp.Targets(browserCtx)
 	if err != nil {
 		return "", nil, err
 	}
@@ -480,7 +483,7 @@ func readTokenAndCookiesFromRemoteBrowser(debugURL, loginURL string) (string, []
 		return "", nil, fmt.Errorf("no browser page target found")
 	}
 
-	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(pageTarget.TargetID))
+	ctx, cancel := chromedp.NewContext(browserCtx, chromedp.WithTargetID(pageTarget.TargetID))
 	defer cancel()
 
 	var token string
