@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const contentPageSize = 10
@@ -65,6 +66,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/message_push", a.handleMessagePush)
 	mux.HandleFunc("/message_push/save", a.handleMessagePushSave)
 	mux.HandleFunc("/message_push/test", a.handleMessagePushTest)
+	mux.HandleFunc("/truthsocial/login", a.handleTruthSocialLogin)
 	mux.HandleFunc("/config_page", a.handleConfigPage)
 	return mux
 }
@@ -140,6 +142,36 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("config saved, accounts=%d", len(cfg.AccountsToMonitor))
 	http.Redirect(w, r, "/?saved=1", http.StatusSeeOther)
+}
+
+func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg, _ := LoadConfig()
+	debugf("HTTP truthsocial login request: username=@%s", cfg.Auth.TruthSocialUsername)
+
+	token, err := fetchBearerTokenWithBrowser(
+		defaultTokenLoginURL,
+		defaultTokenProfileDir,
+		defaultTokenTimeoutSeconds*time.Second,
+		defaultTokenPollIntervalSecond*time.Second,
+		true,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+
+	if err := persistBearerToken(token); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+
+	log.Printf("truthsocial login token captured via web ui")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "已完成登录并写回 Bearer Token。"})
 }
 
 func (a *App) handleContent(w http.ResponseWriter, r *http.Request) {

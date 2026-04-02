@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -19,6 +20,8 @@ const (
 	defaultTokenPollIntervalSecond = 1
 	defaultTokenProfileDir         = ".chrome-token-profile"
 )
+
+var tokenGrabberMu sync.Mutex
 
 func runTokenGrabber(args []string) int {
 	fs := flag.NewFlagSet("get-token", flag.ContinueOnError)
@@ -34,7 +37,7 @@ func runTokenGrabber(args []string) int {
 		return 2
 	}
 
-	token, err := fetchBearerTokenWithBrowser(*loginURL, *profileDir, *timeout, *pollInterval)
+	token, err := fetchBearerTokenWithBrowser(*loginURL, *profileDir, *timeout, *pollInterval, false)
 	if err != nil {
 		log.Printf("获取 Bearer Token 失败: %v", err)
 		return 1
@@ -52,8 +55,11 @@ func runTokenGrabber(args []string) int {
 	return 0
 }
 
-func fetchBearerTokenWithBrowser(loginURL, profileDir string, timeout, pollInterval time.Duration) (string, error) {
-	ctx, cancel, err := newTokenBrowserContext(profileDir, timeout)
+func fetchBearerTokenWithBrowser(loginURL, profileDir string, timeout, pollInterval time.Duration, forceVisible bool) (string, error) {
+	tokenGrabberMu.Lock()
+	defer tokenGrabberMu.Unlock()
+
+	ctx, cancel, err := newTokenBrowserContext(profileDir, timeout, forceVisible)
 	if err != nil {
 		return "", err
 	}
@@ -70,6 +76,9 @@ func fetchBearerTokenWithBrowser(loginURL, profileDir string, timeout, pollInter
 	log.Println("浏览器窗口已打开。请在该窗口中登录 Truth Social。")
 	log.Println("登录后程序会自动检测 localStorage 并写回 Bearer Token。")
 	log.Println("如果你已经登录过，程序可能会在几秒内直接完成。")
+	if forceVisible {
+		log.Println("当前是可见浏览器模式，窗口会直接打开供你手动登录。")
+	}
 	log.Println(strings.Repeat("=", 60))
 
 	return waitForBearerToken(ctx, timeout, pollInterval)
@@ -122,7 +131,7 @@ func persistBearerToken(token string) error {
 	return SaveConfig(cfg)
 }
 
-func newTokenBrowserContext(userDataDir string, timeout time.Duration) (context.Context, func(), error) {
+func newTokenBrowserContext(userDataDir string, timeout time.Duration, forceVisible bool) (context.Context, func(), error) {
 	chromePath, err := findChromeExecPath()
 	if err != nil {
 		return nil, nil, err
@@ -148,7 +157,7 @@ func newTokenBrowserContext(userDataDir string, timeout time.Duration) (context.
 		chromedp.WindowSize(1280, 900),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	}
-	if shouldUseHeadlessTokenBrowser() {
+	if shouldUseHeadlessTokenBrowser(forceVisible) {
 		opts = append(opts, chromedp.Headless)
 	}
 
@@ -164,7 +173,10 @@ func newTokenBrowserContext(userDataDir string, timeout time.Duration) (context.
 	return ctx, cleanup, nil
 }
 
-func shouldUseHeadlessTokenBrowser() bool {
+func shouldUseHeadlessTokenBrowser(forceVisible bool) bool {
+	if forceVisible {
+		return false
+	}
 	if v := strings.TrimSpace(os.Getenv("TRUTHSOCIAL_TOKEN_HEADLESS")); v != "" {
 		switch strings.ToLower(v) {
 		case "1", "true", "yes", "on":
