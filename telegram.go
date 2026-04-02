@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -97,28 +99,53 @@ func sendTelegramMessageWithReplyMarkup(cfg Config, text, parseMode string, repl
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken), bytes.NewReader(body))
-	if err != nil {
-		return false, err.Error()
-	}
-	req.Header.Set("Content-Type", "application/json")
+	for attempt := 0; attempt < 3; attempt++ {
+		req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken), bytes.NewReader(body))
+		if err != nil {
+			return false, err.Error()
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err.Error()
-	}
-	defer resp.Body.Close()
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < 2 {
+				time.Sleep(telegramSendGap)
+				continue
+			}
+			return false, err.Error()
+		}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
-	}
+		respBody, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return false, readErr.Error()
+		}
 
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return false, err.Error()
-	}
-	if ok, _ := result["ok"].(bool); ok {
-		return true, "帖子已成功转发到 Telegram。"
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := telegramRetryAfter(respBody)
+			if retryAfter <= 0 {
+				retryAfter = telegramSendGap
+			}
+			log.Printf("Telegram rate limited for sendMessage, waiting %s", retryAfter)
+			if attempt < 2 {
+				time.Sleep(retryAfter)
+				continue
+			}
+			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return false, err.Error()
+		}
+		if ok, _ := result["ok"].(bool); ok {
+			return true, "帖子已成功转发到 Telegram。"
+		}
+		return false, "Telegram API 返回失败。"
 	}
 	return false, "Telegram API 返回失败。"
 }
@@ -150,19 +177,82 @@ func sendTelegramVideo(cfg Config, videoURL, caption string) (bool, string) {
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := client.Do(req)
-		if err == nil && resp != nil {
-			var result map[string]any
-			_ = json.NewDecoder(resp.Body).Decode(&result)
-			_ = resp.Body.Close()
-			if ok, _ := result["ok"].(bool); ok {
-				return true, "成功发送视频到 Telegram。"
+		if err != nil {
+			if attempt < 2 {
+				time.Sleep(telegramSendGap)
+				continue
 			}
+			return false, err.Error()
+		}
+		if resp == nil {
+			if attempt < 2 {
+				time.Sleep(telegramSendGap)
+				continue
+			}
+			return false, "Telegram 视频请求失败。"
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return false, readErr.Error()
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := telegramRetryAfter(respBody)
+			if retryAfter <= 0 {
+				retryAfter = telegramSendGap
+			}
+			log.Printf("Telegram rate limited for sendVideo, waiting %s", retryAfter)
+			if attempt < 2 {
+				time.Sleep(retryAfter)
+				continue
+			}
+			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if attempt < 2 {
+				time.Sleep(telegramSendGap)
+				continue
+			}
+			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return false, err.Error()
+		}
+		if ok, _ := result["ok"].(bool); ok {
+			return true, "成功发送视频到 Telegram。"
 		}
 		if attempt < 2 {
-			time.Sleep(3 * time.Second)
+			time.Sleep(telegramSendGap)
 		}
 	}
 	return false, "发送 Telegram 视频失败。"
+}
+
+func telegramRetryAfter(body []byte) time.Duration {
+	if len(body) == 0 {
+		return 0
+	}
+
+	var result struct {
+		ErrorCode  int    `json:"error_code"`
+		OK         bool   `json:"ok"`
+		Desc       string `json:"description"`
+		Parameters struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0
+	}
+	if result.ErrorCode == http.StatusTooManyRequests && result.Parameters.RetryAfter > 0 {
+		return time.Duration(result.Parameters.RetryAfter) * time.Second
+	}
+	return 0
 }
 
 func extractYouTubeURL(text string) string {

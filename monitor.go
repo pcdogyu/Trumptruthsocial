@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const telegramSendGap = 8 * time.Second
+
 func parseDuration(interval string) time.Duration {
 	interval = strings.TrimSpace(interval)
 	if interval == "" {
@@ -174,7 +176,7 @@ func forwardUnsentPosts(store *PostStore, cfg Config) {
 		} else {
 			log.Printf("telegram send failed for %s: %s", post.ID, message)
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(telegramSendGap)
 	}
 }
 
