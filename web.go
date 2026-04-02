@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -153,9 +154,19 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := LoadConfig()
 	debugf("HTTP truthsocial login request: username=@%s", cfg.Auth.TruthSocialUsername)
 
+	tempProfileDir, err := os.MkdirTemp("", "truthsocial-login-*")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+	defer func() {
+		_ = os.RemoveAll(tempProfileDir)
+	}()
+	debugf("HTTP truthsocial login temp profile: %s", tempProfileDir)
+
 	token, err := fetchBearerTokenWithBrowser(
 		defaultTokenLoginURL,
-		defaultTokenProfileDir,
+		tempProfileDir,
 		defaultTokenTimeoutSeconds*time.Second,
 		defaultTokenPollIntervalSecond*time.Second,
 		true,
