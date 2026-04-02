@@ -99,16 +99,29 @@ func newLoginSessionManager() *LoginSessionManager {
 
 func (m *LoginSessionManager) Start(username string) (*LoginSession, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, s := range m.sessions {
-		if s != nil {
-			switch s.State() {
-			case LoginSessionStarting, LoginSessionRunning:
-				return s, nil
-			}
+	var staleSessions []*LoginSession
+	for id, s := range m.sessions {
+		if s == nil {
+			delete(m.sessions, id)
+			continue
+		}
+		switch s.State() {
+		case LoginSessionStarting, LoginSessionRunning:
+			log.Printf("replacing active login session: id=%s state=%s", s.ID, s.State())
+			staleSessions = append(staleSessions, s)
+			delete(m.sessions, id)
+		case LoginSessionClosed, LoginSessionError, LoginSessionSuccess:
+			delete(m.sessions, id)
 		}
 	}
+	m.mu.Unlock()
+
+	for _, stale := range staleSessions {
+		go stale.cleanup()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	sess, err := newLoginSession(username)
 	if err != nil {
