@@ -510,8 +510,8 @@ func (a *App) handleMessagePush(w http.ResponseWriter, r *http.Request) {
 		Title:      "消息推送配置",
 		ActivePage: "message",
 		Git:        a.gitInfo,
-		BotToken:   cfg.Telegram.BotToken,
-		ChatID:     cfg.Telegram.ChatID,
+		BotToken:   maskSecret(cfg.Telegram.BotToken),
+		ChatID:     maskSecret(cfg.Telegram.ChatID),
 	}
 	a.render(w, "message_push.html", data)
 }
@@ -534,6 +534,12 @@ func (a *App) handleMessagePushSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg, _ := LoadConfig()
+	if botToken == maskSecret(cfg.Telegram.BotToken) {
+		botToken = cfg.Telegram.BotToken
+	}
+	if chatID == maskSecret(cfg.Telegram.ChatID) {
+		chatID = cfg.Telegram.ChatID
+	}
 	cfg.Telegram.BotToken = botToken
 	cfg.Telegram.ChatID = chatID
 	if err := SaveConfig(cfg); err != nil {

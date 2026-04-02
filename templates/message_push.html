@@ -90,19 +90,13 @@
         <div class="form-group">
             <label for="botToken">Telegram Bot Token</label>
             <div class="input-group mb-3">
-                <input type="password" class="form-control" id="botToken" name="bot_token" value="{{.BotToken}}" placeholder="请输入您的 Telegram Bot Token" required>
-                <div class="input-group-append">
-                    <button class="btn btn-outline-secondary copy-to-clipboard" type="button" data-target="botToken">复制</button>
-                </div>
+                <input type="text" class="form-control" id="botToken" name="bot_token" value="{{.BotToken}}" placeholder="请输入您的 Telegram Bot Token" autocomplete="off" required>
             </div>
         </div>
         <div class="form-group">
             <label for="chatId">Telegram Chat ID</label>
             <div class="input-group mb-3">
-                <input type="password" class="form-control" id="chatId" name="chat_id" value="{{.ChatID}}" placeholder="请输入您希望接收消息的 Chat ID" required>
-                <div class="input-group-append">
-                    <button class="btn btn-outline-secondary copy-to-clipboard" type="button" data-target="chatId">复制</button>
-                </div>
+                <input type="text" class="form-control" id="chatId" name="chat_id" value="{{.ChatID}}" placeholder="请输入您希望接收消息的 Chat ID" autocomplete="off" required>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">保存配置</button>
@@ -123,30 +117,6 @@
 <script>
     $(document).ready(function() {
         var upgradePollTimer = null;
-
-        $('.copy-to-clipboard').on('click', function() {
-            var targetId = $(this).data('target');
-            var $input = $('#' + targetId);
-            var fullValue = $input.val();
-            if (!fullValue) {
-                displaySyncMessage('没有内容可复制。', 'warning');
-                return;
-            }
-
-            var $tempInput = $('<textarea>');
-            $('body').append($tempInput);
-            $tempInput.val(fullValue).select();
-            document.execCommand('copy');
-            $tempInput.remove();
-
-            var originalButtonText = $(this).text();
-            var $button = $(this);
-            $button.text('已复制!').prop('disabled', true);
-            setTimeout(function() {
-                $button.text(originalButtonText).prop('disabled', false);
-            }, 1500);
-            displaySyncMessage('已复制到剪贴板。', 'success');
-        });
 
         function displaySyncMessage(message, type = 'info') {
             var alertClass = 'alert-' + type;
