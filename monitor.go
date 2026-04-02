@@ -75,6 +75,39 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 	return added, nil
 }
 
+func syncLatestAccounts(store *PostStore) (int, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return 0, err
+	}
+
+	added := 0
+	for _, entry := range cfg.AccountsToMonitor {
+		profileURL := normalizeProfileURL(entry)
+		if profileURL == "" {
+			continue
+		}
+
+		posts, err := fetchLatestPostsWithLimit(profileURL, cfg, 1)
+		if err != nil {
+			log.Printf("fetch latest post failed for %s: %v", profileURL, err)
+			continue
+		}
+		if len(posts) == 0 {
+			continue
+		}
+		ok, err := store.AddPost(posts[0])
+		if err != nil {
+			log.Printf("store add latest post failed: %v", err)
+			continue
+		}
+		if ok {
+			added++
+		}
+	}
+	return added, nil
+}
+
 func runMonitor(store *PostStore) {
 	for {
 		cfg, err := LoadConfig()
@@ -111,42 +144,7 @@ func runMonitor(store *PostStore) {
 			}
 		}
 
-		unsent := store.GetUnsentPosts()
-		for _, post := range unsent {
-			if cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" || strings.Contains(cfg.Telegram.BotToken, "YOUR_TELEGRAM_BOT_TOKEN") {
-				break
-			}
-
-			var ok bool
-			var message string
-			if strings.TrimSpace(post.VideoURL) != "" {
-				caption := "<b>" + post.Username + " 发布了新视频:</b>\n\n" + htmlEscape(post.Content) + "\n\n<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
-				ok, message = sendTelegramVideo(cfg, post.VideoURL, caption)
-			} else {
-				ok, message = forwardPostToTelegram(cfg, post)
-			}
-			if ok {
-				if _, err := store.MarkSent(post.ID); err != nil {
-					log.Printf("mark sent failed for %s: %v", post.ID, err)
-				}
-			} else {
-				log.Printf("telegram send failed for %s: %s", post.ID, message)
-			}
-			time.Sleep(1 * time.Second)
-		}
-
 		log.Printf("监控周期结束，休眠 %s", interval)
 		time.Sleep(interval)
 	}
-}
-
-func htmlEscape(value string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"'", "&#39;",
-		"\"", "&quot;",
-	)
-	return replacer.Replace(value)
 }

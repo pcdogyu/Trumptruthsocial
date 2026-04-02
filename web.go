@@ -228,6 +228,18 @@ func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := LoadConfig()
 	success, message := forwardPostToTelegram(cfg, post)
 	if success {
+		if updated, err := a.store.MarkSent(postID); err != nil {
+			log.Printf("mark sent failed for %s: %v", postID, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"message": "帖子已发送到 Telegram，但本地发送状态更新失败，请刷新后重试。",
+			})
+			return
+		} else if !updated {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"message": "帖子已发送到 Telegram，但未能更新本地发送状态。",
+			})
+			return
+		}
 		log.Printf("post forwarded: %s", postID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": message})
 		return
@@ -256,7 +268,7 @@ func (a *App) handleSyncLatestPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	added, err := syncAllAccounts(a.store, 0)
+	added, err := syncLatestAccounts(a.store)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, SyncResponse{Status: "error", Message: err.Error()})
 		return

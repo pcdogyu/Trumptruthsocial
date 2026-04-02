@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
@@ -10,9 +11,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -54,6 +57,14 @@ func extractUsernameFromEntry(entry string) string {
 }
 
 func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
+	return fetchLatestPostsWithLimit(profileURL, cfg, 40)
+}
+
+func fetchLatestPostsWithLimit(profileURL string, cfg Config, limit int) ([]Post, error) {
+	if posts, err := fetchPostsViaBrowserAPI(profileURL, limit); err == nil && len(posts) > 0 {
+		return posts, nil
+	}
+
 	page, err := fetchPageHTMLWithBrowser(profileURL)
 	if err != nil {
 		page, err = fetchPageHTMLWithHTTP(profileURL, cfg)
@@ -71,7 +82,12 @@ func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
 		return nil, fmt.Errorf("truth social returned a Cloudflare block page")
 	}
 
-	return parsePostsFromHTML(page, username), nil
+	posts := parsePostsFromHTML(page, username)
+	sortPostsByFreshness(posts)
+	if limit > 0 && len(posts) > limit {
+		posts = posts[:limit]
+	}
+	return posts, nil
 }
 
 func parsePostsFromHTML(page, username string) []Post {
@@ -260,6 +276,152 @@ func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
 	return page, nil
 }
 
+type mastodonLookupAccount struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Acct     string `json:"acct"`
+	URL      string `json:"url"`
+}
+
+type mastodonMediaAttachment struct {
+	Type      string `json:"type"`
+	URL       string `json:"url"`
+	RemoteURL string `json:"remote_url"`
+}
+
+type mastodonStatus struct {
+	ID               string                    `json:"id"`
+	CreatedAt        string                    `json:"created_at"`
+	Content          string                    `json:"content"`
+	URL              string                    `json:"url"`
+	MediaAttachments []mastodonMediaAttachment `json:"media_attachments"`
+}
+
+type mastodonFeedPayload struct {
+	Account  mastodonLookupAccount `json:"account"`
+	Statuses []mastodonStatus      `json:"statuses"`
+}
+
+func fetchPostsViaBrowserAPI(profileURL string, limit int) ([]Post, error) {
+	account := extractUsernameFromEntry(profileURL)
+	if account == "" {
+		return nil, fmt.Errorf("empty Truth Social account")
+	}
+
+	ctx, cleanup, err := newBrowserContext()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	var raw string
+	js := fmt.Sprintf(`(async () => {
+		const acct = %s;
+		const lookupRes = await fetch("https://truthsocial.com/api/v1/accounts/lookup?acct=" + encodeURIComponent(acct), {
+			credentials: "include",
+			headers: { "Accept": "application/json" }
+		});
+		if (!lookupRes.ok) {
+			throw new Error("lookup failed: " + lookupRes.status);
+		}
+		const account = await lookupRes.json();
+		const statusesRes = await fetch("https://truthsocial.com/api/v1/accounts/" + account.id + "/statuses?limit=%d&exclude_replies=true&exclude_reblogs=true", {
+			credentials: "include",
+			headers: { "Accept": "application/json" }
+		});
+		if (!statusesRes.ok) {
+			throw new Error("statuses failed: " + statusesRes.status);
+		}
+		return JSON.stringify({ account: account, statuses: await statusesRes.json() });
+	})()`, strconv.Quote(account), limit)
+
+	tasks := []chromedp.Action{
+		chromedp.Navigate(profileURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return chromedp.Evaluate(js, &raw,
+				func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+					return p.WithAwaitPromise(true)
+				},
+			).Do(ctx)
+		}),
+	}
+	if err := chromedp.Run(ctx, tasks...); err != nil {
+		return nil, err
+	}
+
+	var payload mastodonFeedPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Statuses) == 0 {
+		return nil, fmt.Errorf("no statuses returned by API")
+	}
+
+	posts := make([]Post, 0, len(payload.Statuses))
+	username := payload.Account.Username
+	if username == "" {
+		username = payload.Account.Acct
+	}
+	if username == "" {
+		username = account
+	}
+	for _, status := range payload.Statuses {
+		posts = append(posts, Post{
+			ID:        status.ID,
+			Username:  username,
+			Content:   extractContent(status.Content),
+			WebURL:    resolveStatusURL(status.URL, username, status.ID),
+			VideoURL:  selectVideoURL(status.MediaAttachments),
+			Timestamp: normalizePostTimestamp(status.CreatedAt),
+			Status:    PostStatusNormal,
+		})
+	}
+	sortPostsByFreshness(posts)
+	if limit > 0 && len(posts) > limit {
+		posts = posts[:limit]
+	}
+	return posts, nil
+}
+
+func newBrowserContext() (context.Context, func(), error) {
+	chromePath, err := findChromeExecPath()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	userDataDir, err := filepath.Abs(".chrome-profile")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(userDataDir, 0755); err != nil {
+		return nil, nil, err
+	}
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.UserDataDir(userDataDir),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("excludeSwitches", "enable-automation"),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	ctx, ctxCancel := chromedp.NewContext(allocCtx)
+	ctx, timeoutCancel := context.WithTimeout(ctx, 90*time.Second)
+
+	cleanup := func() {
+		timeoutCancel()
+		ctxCancel()
+		allocCancel()
+	}
+	return ctx, cleanup, nil
+}
+
 func waitForRenderablePosts(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	selectorExpr := `document.querySelectorAll("article[data-id], div[data-id], article[data-testid='post'], div[data-testid='post'], div.status[data-id]").length`
@@ -277,6 +439,52 @@ func waitForRenderablePosts(ctx context.Context, timeout time.Duration) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+func sortPostsByFreshness(posts []Post) {
+	sort.Slice(posts, func(i, j int) bool {
+		ti := parsePostTime(posts[i].Timestamp)
+		tj := parsePostTime(posts[j].Timestamp)
+		if ti.Equal(tj) {
+			return posts[i].ID > posts[j].ID
+		}
+		return ti.After(tj)
+	})
+}
+
+func resolveStatusURL(rawURL, username, postID string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL != "" {
+		return rawURL
+	}
+	if username == "" || postID == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://truthsocial.com/@%s/posts/%s", username, postID)
+}
+
+func selectVideoURL(media []mastodonMediaAttachment) string {
+	for _, attachment := range media {
+		kind := strings.ToLower(strings.TrimSpace(attachment.Type))
+		if kind != "video" && kind != "gifv" {
+			continue
+		}
+		if url := strings.TrimSpace(attachment.URL); url != "" {
+			return url
+		}
+		if url := strings.TrimSpace(attachment.RemoteURL); url != "" {
+			return url
+		}
+	}
+	for _, attachment := range media {
+		if url := strings.TrimSpace(attachment.URL); url != "" {
+			return url
+		}
+		if url := strings.TrimSpace(attachment.RemoteURL); url != "" {
+			return url
+		}
+	}
+	return ""
 }
 
 func fetchPageHTMLWithHTTP(profileURL string, cfg Config) (string, error) {
