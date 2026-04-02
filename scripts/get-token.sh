@@ -16,10 +16,34 @@ ensure_browser_installed() {
   if command -v snap >/dev/null 2>&1; then
     log "no browser found; installing Chromium snap"
     snap install chromium >/dev/null
+    ensure_chromium_snap_runtime >/dev/null 2>&1 || true
     return 0
   fi
 
   return 1
+}
+
+ensure_chromium_snap_runtime() {
+  if ! command -v snap >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! snap list mesa-2404 >/dev/null 2>&1; then
+    log "installing Chromium GPU runtime snap mesa-2404"
+    snap install mesa-2404 >/dev/null
+  fi
+
+  if snap list gnome-46-2404 >/dev/null 2>&1; then
+    snap connect chromium:gnome-46-2404 gnome-46-2404:gnome-46-2404 >/dev/null 2>&1 || true
+  fi
+  if snap list mesa-2404 >/dev/null 2>&1; then
+    snap connect chromium:gpu-2404 mesa-2404:gpu-2404 >/dev/null 2>&1 || true
+  fi
+  if snap list gtk-common-themes >/dev/null 2>&1; then
+    snap connect chromium:gtk-3-themes gtk-common-themes:gtk-3-themes >/dev/null 2>&1 || true
+    snap connect chromium:icon-themes gtk-common-themes:icon-themes >/dev/null 2>&1 || true
+    snap connect chromium:sound-themes gtk-common-themes:sound-themes >/dev/null 2>&1 || true
+  fi
 }
 
 ensure_xvfb_installed() {
@@ -115,6 +139,7 @@ if ! browser_path="$(find_browser)"; then
     log "set TRUTHSOCIAL_CHROME_PATH=/full/path/to/browser if it is installed"
     exit 1
   fi
+  ensure_chromium_snap_runtime >/dev/null 2>&1 || true
   browser_path="$(find_browser)" || {
     log "error: browser installation completed but no executable was detected"
     exit 1
