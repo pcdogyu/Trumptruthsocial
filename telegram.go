@@ -84,7 +84,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 			return true, message
 		}
 		if isTelegramVideoTooLargeError(message) {
-			return sendTelegramHTMLMessage(cfg, buildOversizedMediaFallbackText(post))
+			return sendTelegramHTMLMessage(cfg, buildOversizedMediaFallbackText(post, message))
 		}
 		log.Printf("telegram video send failed for %s: %s, falling back to text", post.ID, message)
 		return sendTelegramHTMLMessage(cfg, buildMediaFallbackText(post))
@@ -218,7 +218,7 @@ func sendTelegramVideoAsUpload(cfg Config, videoURL, caption string) (bool, stri
 	if size, contentType, err := probeRemoteFileInfo(videoURL); err == nil {
 		debugf("telegram video probe: url=%s size=%d content_type=%s", summarizeMediaURL(videoURL), size, contentType)
 		if size > 0 && size > telegramVideoUploadMaxBytes {
-			return false, fmt.Sprintf("视频大小 %.1fMB 超过 Telegram 上传限制，无法内嵌播放。", float64(size)/(1024*1024))
+			return false, fmt.Sprintf("文件大小 %.1f MB，超过 Telegram 限制，已转链接发送。", float64(size)/(1024*1024))
 		}
 	} else {
 		debugf("telegram video probe failed: url=%s err=%v", summarizeMediaURL(videoURL), err)
@@ -753,8 +753,12 @@ func shouldFallbackToTelegramVideoURL(message string) bool {
 	return true
 }
 
-func buildOversizedMediaFallbackText(post Post) string {
-	return "<b>文件过大，已改为链接发送。</b>\n\n" + buildMediaFallbackText(post)
+func buildOversizedMediaFallbackText(post Post, message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "文件过大，已转链接发送。"
+	}
+	return "<b>" + html.EscapeString(message) + "</b>\n\n" + buildMediaFallbackText(post)
 }
 
 func isTelegramVideoTooLargeError(message string) bool {
