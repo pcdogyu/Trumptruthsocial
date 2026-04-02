@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -61,8 +62,12 @@ func fetchLatestPosts(profileURL string, cfg Config) ([]Post, error) {
 }
 
 func fetchLatestPostsWithLimit(profileURL string, cfg Config, limit int) ([]Post, error) {
-	if posts, err := fetchPostsViaBrowserAPI(profileURL, limit); err == nil && len(posts) > 0 {
+	var apiErr error
+	if posts, err := fetchPostsViaBrowserAPI(profileURL, cfg, limit); err == nil && len(posts) > 0 {
 		return posts, nil
+	} else if err != nil {
+		apiErr = err
+		log.Printf("browser API fetch failed for %s: %v", profileURL, err)
 	}
 
 	page, err := fetchPageHTMLWithBrowser(profileURL)
@@ -86,6 +91,9 @@ func fetchLatestPostsWithLimit(profileURL string, cfg Config, limit int) ([]Post
 	sortPostsByFreshness(posts)
 	if limit > 0 && len(posts) > limit {
 		posts = posts[:limit]
+	}
+	if len(posts) == 0 && apiErr != nil {
+		return nil, apiErr
 	}
 	return posts, nil
 }
@@ -302,51 +310,98 @@ type mastodonFeedPayload struct {
 	Statuses []mastodonStatus      `json:"statuses"`
 }
 
-func fetchPostsViaBrowserAPI(profileURL string, limit int) ([]Post, error) {
+func fetchPostsViaBrowserAPI(profileURL string, cfg Config, limit int) ([]Post, error) {
 	account := extractUsernameFromEntry(profileURL)
 	if account == "" {
 		return nil, fmt.Errorf("empty Truth Social account")
 	}
 
-	ctx, cleanup, err := newBrowserContext()
+	candidates := browserProfileCandidates()
+	var lastErr error
+	for _, userDataDir := range candidates {
+		posts, err := fetchPostsViaBrowserAPIWithProfile(profileURL, cfg, limit, userDataDir)
+		if err == nil && len(posts) > 0 {
+			return posts, nil
+		}
+		if err != nil {
+			lastErr = err
+			log.Printf("browser profile %s fetch failed for %s: %v", userDataDir, profileURL, err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no usable browser profile with Truth Social auth was found")
+	}
+	return nil, lastErr
+}
+
+func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int, userDataDir string) ([]Post, error) {
+	account := extractUsernameFromEntry(profileURL)
+	ctx, cleanup, err := newBrowserContext(userDataDir)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
+	var authToken string
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(profileURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return chromedp.Evaluate(`(() => {
+				try {
+					const raw = localStorage.getItem('truth:auth');
+					if (!raw) return '';
+					const auth = JSON.parse(raw);
+					const users = auth && auth.users ? auth.users : {};
+					const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+					const first = current || Object.values(users)[0] || null;
+					return first && first.access_token ? first.access_token : '';
+				} catch (e) {
+					return '';
+				}
+			})()`, &authToken).Do(ctx)
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	token := strings.TrimSpace(authToken)
+	if token == "" {
+		token = strings.TrimSpace(cfg.Auth.BearerToken)
+	}
+	if token == "" || strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN") {
+		return nil, fmt.Errorf("no Truth Social access token available")
+	}
+
 	var raw string
 	js := fmt.Sprintf(`(async () => {
 		const acct = %s;
+		const headers = { "Accept": "application/json", "Authorization": "Bearer " + %s };
 		const lookupRes = await fetch("https://truthsocial.com/api/v1/accounts/lookup?acct=" + encodeURIComponent(acct), {
 			credentials: "include",
-			headers: { "Accept": "application/json" }
+			headers
 		});
 		if (!lookupRes.ok) {
 			throw new Error("lookup failed: " + lookupRes.status);
 		}
 		const account = await lookupRes.json();
-		const statusesRes = await fetch("https://truthsocial.com/api/v1/accounts/" + account.id + "/statuses?limit=%d&exclude_replies=true&exclude_reblogs=true", {
+		const statusesRes = await fetch("https://truthsocial.com/api/v1/accounts/" + account.id + "/statuses?limit=%d", {
 			credentials: "include",
-			headers: { "Accept": "application/json" }
+			headers
 		});
 		if (!statusesRes.ok) {
 			throw new Error("statuses failed: " + statusesRes.status);
 		}
 		return JSON.stringify({ account: account, statuses: await statusesRes.json() });
-	})()`, strconv.Quote(account), limit)
+	})()`, strconv.Quote(account), strconv.Quote(token), limit)
 
-	tasks := []chromedp.Action{
-		chromedp.Navigate(profileURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.Evaluate(js, &raw,
-				func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-					return p.WithAwaitPromise(true)
-				},
-			).Do(ctx)
-		}),
-	}
-	if err := chromedp.Run(ctx, tasks...); err != nil {
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return chromedp.Evaluate(js, &raw,
+			func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+				return p.WithAwaitPromise(true)
+			},
+		).Do(ctx)
+	})); err != nil {
 		return nil, err
 	}
 
@@ -384,13 +439,13 @@ func fetchPostsViaBrowserAPI(profileURL string, limit int) ([]Post, error) {
 	return posts, nil
 }
 
-func newBrowserContext() (context.Context, func(), error) {
+func newBrowserContext(userDataDir string) (context.Context, func(), error) {
 	chromePath, err := findChromeExecPath()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	userDataDir, err := filepath.Abs(".chrome-profile")
+	userDataDir, err = filepath.Abs(userDataDir)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -420,6 +475,34 @@ func newBrowserContext() (context.Context, func(), error) {
 		allocCancel()
 	}
 	return ctx, cleanup, nil
+}
+
+func browserProfileCandidates() []string {
+	candidates := []string{}
+	if override := strings.TrimSpace(os.Getenv("TRUTHSOCIAL_BROWSER_PROFILE_DIR")); override != "" {
+		candidates = append(candidates, override)
+	}
+	candidates = append(candidates,
+		".chrome-profile",
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "User Data"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "Edge", "User Data"),
+	)
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[strings.ToLower(candidate)]; ok {
+			continue
+		}
+		seen[strings.ToLower(candidate)] = struct{}{}
+		if _, err := os.Stat(candidate); err == nil {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }
 
 func waitForRenderablePosts(ctx context.Context, timeout time.Duration) error {
