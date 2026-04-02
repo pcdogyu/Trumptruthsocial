@@ -61,7 +61,7 @@ func fetchBearerTokenWithBrowser(loginURL, profileDir string, timeout, pollInter
 
 	ctx, cancel, err := newTokenBrowserContext(profileDir, timeout, forceVisible)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("启动浏览器失败: %w", err)
 	}
 	defer cancel()
 
@@ -69,7 +69,7 @@ func fetchBearerTokenWithBrowser(loginURL, profileDir string, timeout, pollInter
 		chromedp.Navigate(loginURL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	); err != nil {
-		return "", err
+		return "", fmt.Errorf("打开登录页面失败: %w", err)
 	}
 
 	log.Println(strings.Repeat("=", 60))
@@ -151,6 +151,7 @@ func newTokenBrowserContext(userDataDir string, timeout time.Duration, forceVisi
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.DisableGPU,
+		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("excludeSwitches", "enable-automation"),

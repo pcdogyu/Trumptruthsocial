@@ -11,6 +11,8 @@ export PATH="/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 echo "[$(date -Iseconds)] upgrade started"
 cd "$ROOT_DIR"
 
+trap 'status=$?; echo "[$(date -Iseconds)] upgrade failed with exit code ${status}"; exit "${status}"' ERR
+
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$CURRENT_BRANCH" != "golang" ]]; then
   echo "[$(date -Iseconds)] expected golang branch, got $CURRENT_BRANCH"

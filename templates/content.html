@@ -23,6 +23,38 @@
         .post-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
         .sync-actions .btn { padding: 0.65rem 1.1rem; font-size: 1rem; }
         .post-actions .btn { padding: 0.5rem 1rem; min-width: 76px; }
+        .upgrade-nav-link { color: #fff !important; font-weight: 700; }
+        .upgrade-nav-link:hover { color: #fff !important; text-decoration: underline; }
+        .upgrade-float-window {
+            position: fixed;
+            top: 74px;
+            right: 20px;
+            width: min(720px, calc(100vw - 40px));
+            z-index: 1060;
+        }
+        .upgrade-float-window .card { border: 1px solid rgba(0, 0, 0, 0.15); }
+        .upgrade-log-box {
+            height: 420px;
+            max-height: 60vh;
+            overflow: auto;
+            background: #0f172a;
+            color: #e5e7eb;
+            padding: 12px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.85rem;
+        }
+        @media (max-width: 768px) {
+            .upgrade-float-window {
+                top: 66px;
+                right: 10px;
+                left: 10px;
+                width: auto;
+            }
+            .upgrade-log-box { height: 300px; }
+        }
     </style>
 </head>
 <body>
@@ -57,12 +89,29 @@
             <li class="nav-item {{if eq .ActivePage "ai"}}active{{end}}"><a class="nav-link" href="/ai_config">AI 配置</a></li>
             <li class="nav-item {{if eq .ActivePage "message"}}active{{end}}"><a class="nav-link" href="/message_push">消息推送</a></li>
             <li class="nav-item {{if eq .ActivePage "content"}}active{{end}}"><a class="nav-link" href="/content">内容</a></li>
-            <li class="nav-item ml-md-2">
-                <a class="nav-link text-warning font-weight-bold" href="#" id="upgradeButton">升级</a>
+        </ul>
+        <ul class="navbar-nav ml-auto">
+            <li class="nav-item">
+                <a class="nav-link upgrade-nav-link" href="#" id="upgradeButton">升级</a>
             </li>
         </ul>
     </div>
 </nav>
+
+<div id="upgradeFloatingWindow" class="upgrade-float-window d-none">
+    <div class="card shadow-lg">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>升级日志</strong>
+            <button type="button" class="close" aria-label="Close" id="closeUpgradeWindow">
+                <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="card-body">
+            <div id="upgradeStatusText" class="text-muted mb-2">等待升级任务启动。</div>
+            <div id="upgradeLogContent" class="upgrade-log-box">点击“升级”后，这里会显示升级脚本的实时日志。</div>
+        </div>
+    </div>
+</div>
 
 <main role="main" class="container page-shell">
     <h1 class="mt-5">历史内容</h1>
@@ -183,8 +232,99 @@
 
         function selectedIds() {
             return $('.post-select:checked').map(function() {
-                return $(this).val();
-            }).get();
+            return $(this).val();
+        }).get();
+    }
+
+        var upgradePollTimer = null;
+
+        function setUpgradeStatus(message, type) {
+            var $status = $('#upgradeStatusText');
+            if (!$status.length) {
+                return;
+            }
+            $status.removeClass('text-muted text-info text-success text-warning text-danger');
+            $status.addClass(type ? 'text-' + type : 'text-muted');
+            $status.text(message || '');
+        }
+
+        function setUpgradeLog(message) {
+            var $log = $('#upgradeLogContent');
+            if (!$log.length) {
+                return;
+            }
+            $log.text(message || '等待升级日志...');
+            $log.scrollTop($log[0].scrollHeight);
+        }
+
+        function showUpgradeWindow() {
+            $('#upgradeFloatingWindow').removeClass('d-none');
+        }
+
+        function stopUpgradePolling() {
+            if (upgradePollTimer) {
+                clearInterval(upgradePollTimer);
+                upgradePollTimer = null;
+            }
+        }
+
+        function pollUpgradeLog() {
+            $.ajax({
+                url: '/upgrade/log',
+                type: 'GET',
+                cache: false,
+                success: function(response) {
+                    showUpgradeWindow();
+                    if (response.status === 'running') {
+                        setUpgradeStatus('升级正在执行，请稍候。', 'warning');
+                    } else if (response.status === 'finished') {
+                        setUpgradeStatus('升级已完成。', 'success');
+                    } else {
+                        setUpgradeStatus('等待升级任务。', 'info');
+                    }
+                    setUpgradeLog(response.log || '暂无升级日志，等待脚本输出...');
+                    if (response.finished) {
+                        stopUpgradePolling();
+                    }
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '读取升级日志失败。';
+                    setUpgradeStatus(errorMsg, 'danger');
+                    setUpgradeLog(errorMsg);
+                    stopUpgradePolling();
+                }
+            });
+        }
+
+        function startUpgradePolling() {
+            stopUpgradePolling();
+            pollUpgradeLog();
+            upgradePollTimer = setInterval(pollUpgradeLog, 1000);
+        }
+
+        function startUpgradeFlow($button, originalText) {
+            showUpgradeWindow();
+            setUpgradeStatus('正在启动升级任务...', 'info');
+            setUpgradeLog('正在启动升级任务，请稍候...');
+            $.ajax({
+                url: '/upgrade',
+                type: 'POST',
+                success: function(response) {
+                    setUpgradeStatus(response.message || '升级任务已启动。', 'warning');
+                    startUpgradePolling();
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '升级启动失败。';
+                    setUpgradeStatus(errorMsg, 'danger');
+                    setUpgradeLog(errorMsg);
+                    stopUpgradePolling();
+                },
+                complete: function() {
+                    if ($button && originalText) {
+                        $button.removeClass('disabled').text(originalText);
+                    }
+                }
+            });
         }
 
         function bulkAction(action) {
@@ -308,20 +448,12 @@
             var $button = $(this);
             var originalText = $button.text();
             $button.addClass('disabled').text('升级中...');
-            $.ajax({
-                url: '/upgrade',
-                type: 'POST',
-                success: function(response) {
-                    displaySyncMessage(response.message || '升级任务已启动。', 'warning');
-                },
-                error: function(xhr) {
-                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '升级启动失败。';
-                    displaySyncMessage(errorMsg, 'danger');
-                },
-                complete: function() {
-                    $button.removeClass('disabled').text(originalText);
-                }
-            });
+            startUpgradeFlow($button, originalText);
+        });
+
+        $('#closeUpgradeWindow').on('click', function() {
+            stopUpgradePolling();
+            $('#upgradeFloatingWindow').addClass('d-none');
         });
 
         $('.col-md-9').on('click', '.delete-btn', function() {

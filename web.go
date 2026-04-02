@@ -62,6 +62,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/sync_content", a.handleSyncContent)
 	mux.HandleFunc("/sync_latest_post", a.handleSyncLatestPost)
 	mux.HandleFunc("/upgrade", a.handleUpgrade)
+	mux.HandleFunc("/upgrade/log", a.handleUpgradeLog)
 	mux.HandleFunc("/ai_config", a.handleAIConfig)
 	mux.HandleFunc("/ai_config/save", a.handleSaveAIConfig)
 	mux.HandleFunc("/message_push", a.handleMessagePush)
@@ -152,17 +153,18 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg, _ := LoadConfig()
-	debugf("HTTP truthsocial login request: username=@%s", cfg.Auth.TruthSocialUsername)
+	log.Printf("truthsocial login requested via web ui: username=@%s", cfg.Auth.TruthSocialUsername)
 
 	tempProfileDir, err := os.MkdirTemp("", "truthsocial-login-*")
 	if err != nil {
+		log.Printf("truthsocial login temp profile create failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
 	defer func() {
 		_ = os.RemoveAll(tempProfileDir)
 	}()
-	debugf("HTTP truthsocial login temp profile: %s", tempProfileDir)
+	log.Printf("truthsocial login temp profile: %s", tempProfileDir)
 
 	token, err := fetchBearerTokenWithBrowser(
 		defaultTokenLoginURL,
@@ -172,11 +174,13 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 		true,
 	)
 	if err != nil {
+		log.Printf("truthsocial login failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
 
 	if err := persistBearerToken(token); err != nil {
+		log.Printf("truthsocial login persist token failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
