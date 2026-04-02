@@ -8,7 +8,7 @@ accounts_to_monitor:
 # Truth Social 认证设置 (可选)
 # 如果您有 Bearer Token，可以填入这里以进行认证抓取
 auth:
-  bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN" # 从 get_token.py 获取
+  bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN" # 运行 go run . get-token 获取
   bearer_token_backup_1: ""
   bearer_token_backup_2: ""
   bearer_token_updated_at: ""

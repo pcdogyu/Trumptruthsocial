@@ -67,6 +67,18 @@ type ContentPageData struct {
 	Posts            []Post
 	Usernames        []string
 	SelectedUsername string
+	CurrentPage      int
+	PageSize         int
+	TotalPosts       int
+	TotalPages       int
+	PaginationLinks  []PaginationLink
+}
+
+type PaginationLink struct {
+	Label    string
+	URL      string
+	Active   bool
+	Disabled bool
 }
 
 type MessagePushPageData struct {

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -228,57 +229,50 @@ func extractPostID(source, block string, opening postOpening) string {
 }
 
 func fetchPageHTMLWithBrowser(profileURL string) (string, error) {
-	chromePath, err := findChromeExecPath()
-	if err != nil {
-		return "", err
-	}
-
 	userDataDir, err := filepath.Abs(".chrome-profile")
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(userDataDir, 0755); err != nil {
-		return "", err
-	}
-
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
-		chromedp.UserDataDir(userDataDir),
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("excludeSwitches", "enable-automation"),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-	)
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
-
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
 	var page string
-	tasks := []chromedp.Action{
-		chromedp.Navigate(profileURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return waitForRenderablePosts(ctx, 60*time.Second)
-		}),
-		chromedp.Evaluate(`window.scrollBy(0, 800);`, nil),
-		chromedp.Sleep(2 * time.Second),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.Evaluate(`document.querySelectorAll('.status__content__read-more-button, button.read-more-button').forEach(function(btn){ if (btn.offsetParent !== null) btn.click(); });`, nil).Do(ctx)
-		}),
-		chromedp.Sleep(1 * time.Second),
-		chromedp.OuterHTML("html", &page, chromedp.ByQuery),
-	}
+	err = runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
+		tasks := []chromedp.Action{
+			chromedp.Navigate(profileURL),
+			chromedp.WaitReady("body", chromedp.ByQuery),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				return waitForRenderablePosts(ctx, 60*time.Second)
+			}),
+			chromedp.OuterHTML("html", &page, chromedp.ByQuery),
+		}
+		if err := chromedp.Run(ctx, tasks...); err != nil {
+			return err
+		}
 
-	if err := chromedp.Run(ctx, tasks...); err != nil {
+		bestPage := page
+		bestCount := len(mergePostOpenings(page))
+		if err := chromedp.Run(ctx, chromedp.MouseClickXY(200, 200)); err != nil {
+			log.Printf("browser focus click failed for %s: %v", profileURL, err)
+		}
+
+		for i := 0; i < 8; i++ {
+			if err := chromedp.Run(ctx,
+				chromedp.KeyEvent(" "),
+				chromedp.Sleep(2*time.Second),
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					return chromedp.OuterHTML("html", &page, chromedp.ByQuery).Do(ctx)
+				}),
+			); err != nil {
+				log.Printf("browser space scroll failed for %s on attempt %d: %v", profileURL, i+1, err)
+				break
+			}
+			if count := len(mergePostOpenings(page)); count > bestCount {
+				bestCount = count
+				bestPage = page
+			}
+		}
+		page = bestPage
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
 	return page, nil
@@ -336,49 +330,51 @@ func fetchPostsViaBrowserAPI(profileURL string, cfg Config, limit int) ([]Post, 
 
 func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int, userDataDir string) ([]Post, error) {
 	account := extractUsernameFromEntry(profileURL)
-	ctx, cleanup, err := newBrowserContext(userDataDir)
+	var authToken string
+	var posts []Post
+	err := runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
+		if err := chromedp.Run(ctx,
+			chromedp.Navigate(profileURL),
+			chromedp.WaitReady("body", chromedp.ByQuery),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				return chromedp.Evaluate(`(() => {
+					try {
+						const raw = localStorage.getItem('truth:auth');
+						if (!raw) return '';
+						const auth = JSON.parse(raw);
+						const users = auth && auth.users ? auth.users : {};
+						const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+						const first = current || Object.values(users)[0] || null;
+						return first && first.access_token ? first.access_token : '';
+					} catch (e) {
+						return '';
+					}
+				})()`, &authToken).Do(ctx)
+			}),
+		); err != nil {
+			return err
+		}
+
+		tokens := bearerTokenCandidates(cfg, authToken)
+		if len(tokens) == 0 {
+			return fmt.Errorf("no Truth Social access token available")
+		}
+
+		var lastErr error
+		for _, token := range tokens {
+			p, err := fetchPostsViaBrowserAPIWithToken(ctx, account, token, limit)
+			if err == nil {
+				posts = p
+				return nil
+			}
+			lastErr = err
+		}
+		return lastErr
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer cleanup()
-
-	var authToken string
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(profileURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.Evaluate(`(() => {
-				try {
-					const raw = localStorage.getItem('truth:auth');
-					if (!raw) return '';
-					const auth = JSON.parse(raw);
-					const users = auth && auth.users ? auth.users : {};
-					const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-					const first = current || Object.values(users)[0] || null;
-					return first && first.access_token ? first.access_token : '';
-				} catch (e) {
-					return '';
-				}
-			})()`, &authToken).Do(ctx)
-		}),
-	); err != nil {
-		return nil, err
-	}
-
-	tokens := bearerTokenCandidates(cfg, authToken)
-	if len(tokens) == 0 {
-		return nil, fmt.Errorf("no Truth Social access token available")
-	}
-
-	var lastErr error
-	for _, token := range tokens {
-		posts, err := fetchPostsViaBrowserAPIWithToken(ctx, account, token, limit)
-		if err == nil {
-			return posts, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+	return posts, nil
 }
 
 func fetchPostsViaBrowserAPIWithToken(ctx context.Context, account, token string, limit int) ([]Post, error) {
@@ -484,6 +480,140 @@ func newBrowserContext(userDataDir string) (context.Context, func(), error) {
 		allocCancel()
 	}
 	return ctx, cleanup, nil
+}
+
+func runBrowserTaskWithProfileFallback(userDataDir string, task func(context.Context) error) error {
+	ctx, cleanup, err := newBrowserContext(userDataDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	err = task(ctx)
+	if err == nil || !isChromeStartFailure(err) {
+		return err
+	}
+
+	cloneDir, cloneCleanup, cloneErr := cloneBrowserProfile(userDataDir)
+	if cloneErr != nil {
+		return err
+	}
+	defer cloneCleanup()
+
+	ctx2, cleanup2, err := newBrowserContext(cloneDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup2()
+
+	return task(ctx2)
+}
+
+func isChromeStartFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "chrome failed to start") ||
+		strings.Contains(msg, "browser has disconnected")
+}
+
+func cloneBrowserProfile(src string) (string, func(), error) {
+	srcAbs, err := filepath.Abs(src)
+	if err != nil {
+		return "", nil, err
+	}
+	dst, err := os.MkdirTemp("", "truthsocial-profile-clone-*")
+	if err != nil {
+		return "", nil, err
+	}
+
+	copyList := []string{
+		"Local State",
+		filepath.Join("Default", "Local Storage"),
+		filepath.Join("Default", "Network"),
+		filepath.Join("Default", "Preferences"),
+		filepath.Join("Default", "Secure Preferences"),
+		filepath.Join("Default", "Session Storage"),
+		filepath.Join("Default", "WebStorage"),
+		filepath.Join("Default", "IndexedDB"),
+	}
+
+	for _, rel := range copyList {
+		srcPath := filepath.Join(srcAbs, rel)
+		if _, err := os.Stat(srcPath); err != nil {
+			continue
+		}
+		dstPath := filepath.Join(dst, rel)
+		if err := copyProfilePath(srcPath, dstPath); err != nil {
+			_ = os.RemoveAll(dst)
+			return "", nil, err
+		}
+	}
+
+	cleanup := func() {
+		_ = os.RemoveAll(dst)
+	}
+	return dst, cleanup, nil
+}
+
+func copyProfilePath(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if shouldSkipProfileEntry(entry.Name()) {
+				continue
+			}
+			if err := copyProfilePath(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if shouldSkipProfileEntry(filepath.Base(src)) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
+func shouldSkipProfileEntry(name string) bool {
+	switch strings.ToLower(name) {
+	case "lockfile", "devtoolsactiveport", "singletoncookie", "singletonlock", "singlesession":
+		return true
+	default:
+		return false
+	}
 }
 
 func browserProfileCandidates() []string {
@@ -699,13 +829,41 @@ func isCloudflareBlock(page string) bool {
 }
 
 func findChromeExecPath() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("TRUTHSOCIAL_CHROME_PATH")); override != "" {
+		if _, err := os.Stat(override); err == nil {
+			return override, nil
+		}
+	}
+
 	candidates := []string{
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		"microsoft-edge",
+		"msedge",
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
+		"/snap/bin/chromium",
+		"/usr/bin/microsoft-edge",
+		"/usr/bin/msedge",
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 	}
 	for _, path := range candidates {
+		if strings.Contains(path, string(os.PathSeparator)) || strings.Contains(path, `\`) {
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
+			continue
+		}
+		if resolved, err := exec.LookPath(path); err == nil {
+			return resolved, nil
+		}
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}

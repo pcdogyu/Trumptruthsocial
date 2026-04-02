@@ -131,7 +131,7 @@ func (s *PostStore) GetUnsentPosts() []Post {
 	return items
 }
 
-func (s *PostStore) GetAllPosts(username string, limit int) []Post {
+func (s *PostStore) GetAllPosts(username string, limit int, offset int) []Post {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,6 +145,15 @@ func (s *PostStore) GetAllPosts(username string, limit int) []Post {
 		}
 	}
 	sortPostsDesc(items)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []Post{}
+	}
+	if offset > 0 {
+		items = items[offset:]
+	}
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}

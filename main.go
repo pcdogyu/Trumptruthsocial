@@ -17,6 +17,10 @@ func ensureFiles() error {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "get-token" {
+		os.Exit(runTokenGrabber(os.Args[2:]))
+	}
+
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
 
 	rotator, err := NewDailyRotatingWriter(".", "go.log")

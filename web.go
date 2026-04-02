@@ -6,11 +6,15 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+const contentPageSize = 10
 
 type App struct {
 	store     *PostStore
@@ -146,15 +150,33 @@ func (a *App) handleContent(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/content" && r.URL.Path != "/content/" {
 		selected = strings.TrimPrefix(r.URL.Path, "/content/")
 		selected = strings.Trim(selected, "/")
+		if decoded, err := url.PathUnescape(selected); err == nil {
+			selected = decoded
+		}
 	}
+	page := parsePageNumber(r.URL.Query().Get("page"))
+	totalPosts := len(a.store.GetAllPosts(selected, 0, 0))
+	totalPages := totalPagesFor(totalPosts, contentPageSize)
+	if totalPages == 0 {
+		page = 1
+	} else if page > totalPages {
+		page = totalPages
+	}
+	offset := (page - 1) * contentPageSize
+	posts := a.store.GetAllPosts(selected, contentPageSize, offset)
 
 	data := ContentPageData{
 		Title:            "历史内容",
 		ActivePage:       "content",
 		Git:              a.gitInfo,
-		Posts:            a.store.GetAllPosts(selected, 0),
+		Posts:            posts,
 		Usernames:        a.store.GetUsernames(),
 		SelectedUsername: selected,
+		CurrentPage:      page,
+		PageSize:         contentPageSize,
+		TotalPosts:       totalPosts,
+		TotalPages:       totalPages,
+		PaginationLinks:  buildPaginationLinks(contentBaseURL(selected), page, totalPages),
 	}
 	a.render(w, "content.html", data)
 }
@@ -460,6 +482,81 @@ func maskSecret(value string) string {
 		return value
 	}
 	return value[:4] + strings.Repeat("*", 10) + value[len(value)-4:]
+}
+
+func parsePageNumber(value string) int {
+	page, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func totalPagesFor(total, pageSize int) int {
+	if total <= 0 || pageSize <= 0 {
+		return 0
+	}
+	return (total + pageSize - 1) / pageSize
+}
+
+func contentBaseURL(selected string) string {
+	selected = strings.TrimSpace(selected)
+	if selected == "" {
+		return "/content"
+	}
+	return "/content/" + url.PathEscape(selected)
+}
+
+func buildPaginationLinks(baseURL string, currentPage, totalPages int) []PaginationLink {
+	if totalPages <= 1 {
+		return nil
+	}
+
+	links := make([]PaginationLink, 0, 8)
+	addLink := func(label string, page int, active, disabled bool) {
+		link := PaginationLink{Label: label, Active: active, Disabled: disabled}
+		if !disabled && !active {
+			link.URL = fmt.Sprintf("%s?page=%d", baseURL, page)
+		}
+		links = append(links, link)
+	}
+
+	addLink("上一页", currentPage-1, false, currentPage <= 1)
+
+	candidates := []int{
+		1,
+		totalPages,
+		currentPage,
+		currentPage - 1,
+		currentPage + 1,
+		currentPage - 2,
+		currentPage + 2,
+	}
+	seen := map[int]struct{}{}
+	pageNumbers := make([]int, 0, len(candidates))
+	for _, page := range candidates {
+		if page < 1 || page > totalPages {
+			continue
+		}
+		if _, ok := seen[page]; ok {
+			continue
+		}
+		seen[page] = struct{}{}
+		pageNumbers = append(pageNumbers, page)
+	}
+	sort.Ints(pageNumbers)
+
+	last := 0
+	for _, page := range pageNumbers {
+		if last != 0 && page-last > 1 {
+			links = append(links, PaginationLink{Label: "…", Disabled: true})
+		}
+		addLink(strconv.Itoa(page), page, page == currentPage, false)
+		last = page
+	}
+
+	addLink("下一页", currentPage+1, false, currentPage >= totalPages)
+	return links
 }
 
 func getGitCommitInfo() GitInfo {
