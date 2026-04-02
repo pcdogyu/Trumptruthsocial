@@ -102,6 +102,10 @@ def forward_post_route(post_id):
     success, message = telegram_forwarder.forward_post(post)
     
     if success:
+        try:
+            db_handler.mark_post_as_sent(post_id)
+        except Exception as e:
+            app.logger.error(f"标记帖子 {post_id} 为已发送时出错: {e}")
         return jsonify({'status': 'success', 'message': message})
     else:
         return jsonify({'message': message}), 500

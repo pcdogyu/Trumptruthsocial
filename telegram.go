@@ -11,12 +11,20 @@ import (
 )
 
 func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
+	if strings.TrimSpace(post.VideoURL) != "" {
+		caption := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
+		if strings.TrimSpace(post.Content) != "" {
+			caption += html.EscapeString(post.Content) + "\n\n"
+		}
+		if strings.TrimSpace(post.WebURL) != "" {
+			caption += "<a href='" + html.EscapeString(post.WebURL) + "'>查看原文</a>"
+		}
+		return sendTelegramVideo(cfg, post.VideoURL, caption)
+	}
+
 	text := fmt.Sprintf("<b>来自: @%s</b>\n\n", html.EscapeString(post.Username))
 	if strings.TrimSpace(post.Content) != "" {
 		text += html.EscapeString(post.Content) + "\n\n"
-	}
-	if strings.TrimSpace(post.VideoURL) != "" {
-		text += "视频链接: " + html.EscapeString(post.VideoURL) + "\n\n"
 	}
 	if strings.TrimSpace(post.WebURL) != "" {
 		text += fmt.Sprintf("<a href='%s'>查看原文</a>", html.EscapeString(post.WebURL))
