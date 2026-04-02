@@ -57,6 +57,9 @@
             <li class="nav-item {{if eq .ActivePage "ai"}}active{{end}}"><a class="nav-link" href="/ai_config">AI 配置</a></li>
             <li class="nav-item {{if eq .ActivePage "message"}}active{{end}}"><a class="nav-link" href="/message_push">消息推送</a></li>
             <li class="nav-item {{if eq .ActivePage "content"}}active{{end}}"><a class="nav-link" href="/content">内容</a></li>
+            <li class="nav-item ml-md-2">
+                <a class="nav-link text-warning font-weight-bold" href="#" id="upgradeButton">升级</a>
+            </li>
         </ul>
     </div>
 </nav>
@@ -296,6 +299,27 @@
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
+                }
+            });
+        });
+
+        $('#upgradeButton').on('click', function(e) {
+            e.preventDefault();
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.addClass('disabled').text('升级中...');
+            $.ajax({
+                url: '/upgrade',
+                type: 'POST',
+                success: function(response) {
+                    displaySyncMessage(response.message || '升级任务已启动。', 'warning');
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '升级启动失败。';
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    $button.removeClass('disabled').text(originalText);
                 }
             });
         });

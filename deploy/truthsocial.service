@@ -1,0 +1,15 @@
+[Unit]
+Description=TruthSocial Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Trumptruthsocial
+ExecStart=/opt/Trumptruthsocial/truthsocial.exe
+Restart=always
+RestartSec=5
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

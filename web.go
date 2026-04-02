@@ -59,6 +59,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/posts/bulk_action", a.handleBulkPostsAction)
 	mux.HandleFunc("/sync_content", a.handleSyncContent)
 	mux.HandleFunc("/sync_latest_post", a.handleSyncLatestPost)
+	mux.HandleFunc("/upgrade", a.handleUpgrade)
 	mux.HandleFunc("/ai_config", a.handleAIConfig)
 	mux.HandleFunc("/ai_config/save", a.handleSaveAIConfig)
 	mux.HandleFunc("/message_push", a.handleMessagePush)

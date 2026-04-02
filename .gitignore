@@ -22,7 +22,9 @@ posts.json
 # Go runtime artifacts and logs
 go.log
 go-*.log.gz
+upgrade.log
 truthsocial.exe
+truthsocial.exe~
 .chrome-profile/
 
 # Screenshot files for debugging

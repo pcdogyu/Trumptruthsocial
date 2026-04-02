@@ -45,6 +45,25 @@ If you need to force a visible browser for token login:
 export TRUTHSOCIAL_TOKEN_HEADLESS=0
 ```
 
+## Ubuntu systemd service
+
+Install the service file and enable it:
+
+```bash
+sudo bash scripts/install-systemd.sh
+```
+
+The service runs from `/opt/Trumptruthsocial` and starts `truthsocial.exe`.
+To use the in-app upgrade button, the server must also have `git` and `go` installed.
+
+The upgrade flow is:
+
+1. Click `升级` on the content page.
+2. The app starts `upgrade.sh` through `systemd-run`.
+3. `upgrade.sh` runs `git pull --ff-only origin golang`.
+4. `upgrade.sh` runs `go build -o truthsocial.exe .`.
+5. `upgrade.sh` runs `systemctl restart truthsocial.service`.
+
 ## Windows
 
 - Double-click `start.bat`, or run `truthsocial.exe`.
@@ -89,6 +108,25 @@ export TRUTHSOCIAL_CHROME_PATH=/usr/bin/google-chrome
 ```bash
 export TRUTHSOCIAL_TOKEN_HEADLESS=0
 ```
+
+### Ubuntu systemd 服务
+
+安装并启用服务：
+
+```bash
+sudo bash scripts/install-systemd.sh
+```
+
+服务默认运行在 `/opt/Trumptruthsocial`，启动 `truthsocial.exe`。
+如果要使用页面里的 `升级` 菜单，服务器还需要安装 `git` 和 `go`，因为升级流程会在服务器上直接执行构建。
+
+升级流程：
+
+1. 在内容页点击 `升级`
+2. 程序通过 `systemd-run` 拉起 `upgrade.sh`
+3. `upgrade.sh` 执行 `git pull --ff-only origin golang`
+4. `upgrade.sh` 执行 `go build -o truthsocial.exe .`
+5. `upgrade.sh` 执行 `systemctl restart truthsocial.service`
 
 ### Windows 说明
 
