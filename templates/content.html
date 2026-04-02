@@ -192,9 +192,6 @@
             }
 
             var label = action === 'delete' ? '删除' : '屏蔽';
-            if (action === 'delete' && !confirm('确定要删除选中的帖子吗？删除后下次同步可能重新抓取。')) {
-                return;
-            }
             if (action === 'block' && !confirm('确定要屏蔽选中的帖子吗？屏蔽后将不会再次抓取或转发。')) {
                 return;
             }
