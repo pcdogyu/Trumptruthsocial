@@ -53,8 +53,9 @@ func main() {
 
 	go runMonitor(store)
 
-	log.Println("启动 Web UI，请访问: http://127.0.0.1:8085")
-	if err := http.ListenAndServe("127.0.0.1:8085", app.routes()); err != nil {
+	listenAddr := "0.0.0.0:8085"
+	log.Printf("启动 Web UI，请访问: http://%s", listenAddr)
+	if err := http.ListenAndServe(listenAddr, app.routes()); err != nil {
 		log.Fatalf("http server failed: %v", err)
 	}
 }

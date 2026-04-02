@@ -16,6 +16,12 @@ import (
 	"time"
 )
 
+const (
+	telegramVideoUploadMaxBytes  = 45 * 1024 * 1024
+	telegramMediaProbeTimeout    = 20 * time.Second
+	telegramMediaDownloadTimeout = 120 * time.Second
+)
+
 var youtubeURLRe = regexp.MustCompile(`(?i)https?://(?:www\.|m\.)?(?:youtube\.com/watch\?v=[^\s<]+|youtu\.be/[^\s<]+)`)
 
 func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
@@ -76,6 +82,9 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 		ok, message := sendTelegramVideo(cfg, videoURL, caption)
 		if ok {
 			return true, message
+		}
+		if isTelegramVideoTooLargeError(message) {
+			return sendTelegramHTMLMessage(cfg, buildOversizedMediaFallbackText(post))
 		}
 		log.Printf("telegram video send failed for %s: %s, falling back to text", post.ID, message)
 		return sendTelegramHTMLMessage(cfg, buildMediaFallbackText(post))
@@ -191,6 +200,10 @@ func sendTelegramVideo(cfg Config, videoURL, caption string) (bool, string) {
 	if ok {
 		return true, message
 	}
+	if !shouldFallbackToTelegramVideoURL(message) {
+		log.Printf("telegram video upload skipped url fallback for %s: %s", videoURL, message)
+		return false, message
+	}
 	log.Printf("telegram video upload failed for %s: %s, falling back to url send", videoURL, message)
 	return sendTelegramVideoAsURL(cfg, videoURL, caption)
 }
@@ -202,7 +215,16 @@ func sendTelegramVideoAsUpload(cfg Config, videoURL, caption string) (bool, stri
 		return false, "Telegram 未在 config.yaml 中正确配置。"
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	if size, contentType, err := probeRemoteFileInfo(videoURL); err == nil {
+		debugf("telegram video probe: url=%s size=%d content_type=%s", summarizeMediaURL(videoURL), size, contentType)
+		if size > 0 && size > telegramVideoUploadMaxBytes {
+			return false, fmt.Sprintf("视频大小 %.1fMB 超过 Telegram 上传限制，无法内嵌播放。", float64(size)/(1024*1024))
+		}
+	} else {
+		debugf("telegram video probe failed: url=%s err=%v", summarizeMediaURL(videoURL), err)
+	}
+
+	client := &http.Client{Timeout: telegramMediaDownloadTimeout}
 	for attempt := 0; attempt < 3; attempt++ {
 		videoBytes, fileName, err := downloadRemoteFile(videoURL, "视频", "video.mp4")
 		if err != nil {
@@ -253,6 +275,10 @@ func sendTelegramVideoAsUpload(cfg Config, videoURL, caption string) (bool, stri
 				continue
 			}
 			return false, telegramHTTPErrorMessage(resp.Status, respBody)
+		}
+
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			return false, "Telegram 视频上传超过大小限制，无法内嵌播放。"
 		}
 
 		if resp.StatusCode == http.StatusBadRequest {
@@ -551,7 +577,7 @@ func sendTelegramPhotoAsURL(cfg Config, photoURL, caption string) (bool, string)
 }
 
 func downloadRemoteFile(fileURL, kind, fallback string) ([]byte, string, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: telegramMediaDownloadTimeout}
 	req, err := http.NewRequest(http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -578,6 +604,26 @@ func downloadRemoteFile(fileURL, kind, fallback string) ([]byte, string, error) 
 	}
 
 	return fileBytes, guessFileName(fileURL, fallback), nil
+}
+
+func probeRemoteFileInfo(fileURL string) (int64, string, error) {
+	client := &http.Client{Timeout: telegramMediaProbeTimeout}
+	req, err := http.NewRequest(http.MethodHead, fileURL, nil)
+	if err != nil {
+		return -1, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return -1, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return -1, "", fmt.Errorf("HEAD status %s", resp.Status)
+	}
+	return resp.ContentLength, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
 }
 
 func buildTelegramVideoMultipartBody(chatID, caption, fileName string, videoBytes []byte) ([]byte, string, error) {
@@ -688,6 +734,35 @@ func summarizeMediaURL(raw string) string {
 		return host
 	}
 	return host + "/" + base
+}
+
+func shouldFallbackToTelegramVideoURL(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" {
+		return true
+	}
+	if strings.Contains(message, "超过 telegram 上传限制") {
+		return false
+	}
+	if strings.Contains(message, "request entity too large") {
+		return false
+	}
+	if strings.Contains(message, "413") {
+		return false
+	}
+	return true
+}
+
+func buildOversizedMediaFallbackText(post Post) string {
+	return "<b>文件过大，已改为链接发送。</b>\n\n" + buildMediaFallbackText(post)
+}
+
+func isTelegramVideoTooLargeError(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "超过 telegram 上传限制") ||
+		strings.Contains(message, "视频上传超过大小限制") ||
+		strings.Contains(message, "request entity too large") ||
+		strings.Contains(message, "413")
 }
 
 func telegramRetryAfter(body []byte) time.Duration {
