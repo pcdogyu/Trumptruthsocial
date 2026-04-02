@@ -75,7 +75,7 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 			}
 		}
 	}
-	forwardUnsentPostsWithGap(store, cfg, historicalTelegramSendGap)
+	forwardUnsentPostsWithGap(store, cfg, historicalTelegramSendGapForDays(days))
 	return added, nil
 }
 
@@ -157,6 +157,19 @@ func runMonitor(store *PostStore) {
 
 func forwardUnsentPosts(store *PostStore, cfg Config) {
 	forwardUnsentPostsWithGap(store, cfg, telegramSendGap)
+}
+
+func historicalTelegramSendGapForDays(days int) time.Duration {
+	switch {
+	case days >= 30:
+		return 30 * time.Second
+	case days >= 14:
+		return 25 * time.Second
+	case days >= 7:
+		return historicalTelegramSendGap
+	default:
+		return telegramSendGap
+	}
 }
 
 func forwardUnsentPostsWithGap(store *PostStore, cfg Config, gap time.Duration) {

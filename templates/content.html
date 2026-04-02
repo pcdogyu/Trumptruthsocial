@@ -48,6 +48,8 @@
             <button id="syncLatestButton" class="btn btn-primary">同步最新一条</button>
             <button id="sync3DaysButton" class="btn btn-info">同步最近3天内容</button>
             <button id="syncHistoricalButton" class="btn btn-info">同步最近7天内容</button>
+            <button id="sync14DaysButton" class="btn btn-info">同步最近2周内容</button>
+            <button id="sync30DaysButton" class="btn btn-info">同步最近30天内容</button>
         </div>
         <small class="form-text text-muted">点击同步按钮将尝试获取所有监控账户最近的帖子。</small>
     </div>
@@ -227,6 +229,8 @@
 
         $('#syncHistoricalButton').on('click', function() { syncHistorical(7, this); });
         $('#sync3DaysButton').on('click', function() { syncHistorical(3, this); });
+        $('#sync14DaysButton').on('click', function() { syncHistorical(14, this); });
+        $('#sync30DaysButton').on('click', function() { syncHistorical(30, this); });
 
         function syncHistorical(days, button) {
             var $button = $(button);
