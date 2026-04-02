@@ -11,12 +11,6 @@ import (
 )
 
 func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
-	botToken := strings.TrimSpace(cfg.Telegram.BotToken)
-	chatID := strings.TrimSpace(cfg.Telegram.ChatID)
-	if botToken == "" || chatID == "" || strings.Contains(botToken, "YOUR_TELEGRAM_BOT_TOKEN") {
-		return false, "Telegram 未在 config.yaml 中正确配置。"
-	}
-
 	text := fmt.Sprintf("<b>来自: @%s</b>\n\n", html.EscapeString(post.Username))
 	if strings.TrimSpace(post.Content) != "" {
 		text += html.EscapeString(post.Content) + "\n\n"
@@ -26,6 +20,19 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 	}
 	if strings.TrimSpace(post.WebURL) != "" {
 		text += fmt.Sprintf("<a href='%s'>查看原文</a>", html.EscapeString(post.WebURL))
+	}
+	return sendTelegramHTMLMessage(cfg, text)
+}
+
+func sendTelegramTestMessage(cfg Config) (bool, string) {
+	return sendTelegramHTMLMessage(cfg, "这是一条来自 TruthSocial Monitor 的测试消息。")
+}
+
+func sendTelegramHTMLMessage(cfg Config, text string) (bool, string) {
+	botToken := strings.TrimSpace(cfg.Telegram.BotToken)
+	chatID := strings.TrimSpace(cfg.Telegram.ChatID)
+	if botToken == "" || chatID == "" || strings.Contains(botToken, "YOUR_TELEGRAM_BOT_TOKEN") {
+		return false, "Telegram 未在 config.yaml 中正确配置。"
 	}
 
 	payload := map[string]any{

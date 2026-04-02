@@ -55,6 +55,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/ai_config/save", a.handleSaveAIConfig)
 	mux.HandleFunc("/message_push", a.handleMessagePush)
 	mux.HandleFunc("/message_push/save", a.handleMessagePushSave)
+	mux.HandleFunc("/message_push/test", a.handleMessagePushTest)
 	mux.HandleFunc("/config_page", a.handleConfigPage)
 	return mux
 }
@@ -87,7 +88,7 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Git:              a.gitInfo,
 		Config:           cfg,
 		AccountsText:     strings.Join(cfg.AccountsToMonitor, "\n"),
-		BearerTokenValue: secretOrBlank(cfg.Auth.BearerToken),
+		BearerTokenValue: maskSecret(cfg.Auth.BearerToken),
 		AIApiKeyValue:    secretOrBlank(cfg.AIAnalysis.APIKey),
 	}
 	if r.URL.Query().Get("saved") != "" {
@@ -107,7 +108,13 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg, _ := LoadConfig()
-	cfg.Auth.BearerToken = strings.TrimSpace(r.FormValue("bearer_token"))
+	bearerToken := strings.TrimSpace(r.FormValue("bearer_token"))
+	if bearerToken != "" {
+		if bearerToken == maskSecret(cfg.Auth.BearerToken) {
+			bearerToken = cfg.Auth.BearerToken
+		}
+	}
+	cfg.Auth.BearerToken = bearerToken
 	cfg.Auth.TruthSocialUsername = strings.TrimSpace(r.FormValue("truthsocial_username"))
 	cfg.RefreshInterval = strings.TrimSpace(r.FormValue("refresh_interval"))
 	cfg.AccountsToMonitor = splitLines(r.FormValue("accounts_to_monitor"))
@@ -302,6 +309,21 @@ func (a *App) handleMessagePushSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Telegram 配置已成功保存。"})
 }
 
+func (a *App) handleMessagePushTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg, _ := LoadConfig()
+	ok, message := sendTelegramTestMessage(cfg)
+	if ok {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": message})
+		return
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": message})
+}
+
 func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -331,6 +353,17 @@ func secretOrBlank(value string) string {
 		return ""
 	}
 	return value
+}
+
+func maskSecret(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "YOUR_") {
+		return ""
+	}
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:4] + "****" + value[len(value)-4:]
 }
 
 func getGitCommitInfo() GitInfo {

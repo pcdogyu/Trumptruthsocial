@@ -53,6 +53,7 @@
             </div>
         </div>
         <button type="submit" class="btn btn-primary">保存配置</button>
+        <button type="button" id="testMessageButton" class="btn btn-success ml-2">测试消息</button>
     </form>
     <div id="messageArea" class="mt-3"></div>
 </main>
@@ -124,6 +125,27 @@
                 },
                 complete: function() {
                     $submitButton.prop('disabled', false).text('保存配置');
+                }
+            });
+        });
+
+        $('#testMessageButton').on('click', function() {
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('发送中...');
+            $('#messageArea').empty();
+            $.ajax({
+                url: '/message_push/test',
+                type: 'POST',
+                success: function(response) {
+                    displaySyncMessage(response.message, 'success');
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "测试消息发送失败。";
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
                 }
             });
         });
