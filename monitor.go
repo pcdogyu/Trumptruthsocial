@@ -161,18 +161,7 @@ func forwardUnsentPosts(store *PostStore, cfg Config) {
 
 	unsent := store.GetUnsentPosts()
 	for _, post := range unsent {
-		var ok bool
-		var message string
-		if strings.TrimSpace(post.VideoURL) != "" {
-			caption := "<b>" + post.Username + " 发布了新视频:</b>\n\n" + htmlEscape(post.Content) + "\n\n<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
-			ok, message = sendTelegramVideo(cfg, post.VideoURL, caption)
-			if !ok {
-				log.Printf("telegram video send failed for %s: %s, falling back to text", post.ID, message)
-				ok, message = sendTelegramHTMLMessage(cfg, buildVideoFallbackText(post))
-			}
-		} else {
-			ok, message = forwardPostToTelegram(cfg, post)
-		}
+		ok, message := forwardPostToTelegram(cfg, post)
 		if ok {
 			if _, err := store.MarkSent(post.ID); err != nil {
 				log.Printf("mark sent failed for %s: %v", post.ID, err)

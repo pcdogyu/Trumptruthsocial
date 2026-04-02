@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -38,7 +40,7 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 		return sendTelegramPlainMessageWithReplyMarkup(cfg, text, replyMarkup)
 	}
 
-	if strings.TrimSpace(post.VideoURL) != "" {
+	if shouldSendTelegramVideo(post.VideoURL) {
 		caption := "<b>来自: @" + html.EscapeString(post.Username) + "</b>\n\n"
 		if strings.TrimSpace(post.Content) != "" {
 			caption += html.EscapeString(post.Content) + "\n\n"
@@ -46,7 +48,16 @@ func forwardPostToTelegram(cfg Config, post Post) (bool, string) {
 		if strings.TrimSpace(post.WebURL) != "" {
 			caption += "<a href='" + html.EscapeString(post.WebURL) + "'>查看原文</a>"
 		}
-		return sendTelegramVideo(cfg, post.VideoURL, caption)
+		ok, message := sendTelegramVideo(cfg, post.VideoURL, caption)
+		if ok {
+			return true, message
+		}
+		log.Printf("telegram video send failed for %s: %s, falling back to text", post.ID, message)
+		return sendTelegramHTMLMessage(cfg, buildVideoFallbackText(post))
+	}
+
+	if strings.TrimSpace(post.VideoURL) != "" {
+		return sendTelegramHTMLMessage(cfg, buildVideoFallbackText(post))
 	}
 
 	text := fmt.Sprintf("<b>来自: @%s</b>\n\n", html.EscapeString(post.Username))
@@ -269,6 +280,27 @@ func telegramHTTPErrorMessage(status string, body []byte) string {
 		}
 	}
 	return fmt.Sprintf("Telegram API HTTP 状态码: %s", status)
+}
+
+func shouldSendTelegramVideo(videoURL string) bool {
+	videoURL = strings.TrimSpace(videoURL)
+	if videoURL == "" {
+		return false
+	}
+	if extractYouTubeURL(videoURL) != "" {
+		return false
+	}
+
+	parsed, err := url.Parse(videoURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(path.Ext(parsed.Path)) {
+	case ".mp4", ".mov", ".m4v", ".webm", ".ogg":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractYouTubeURL(text string) string {
