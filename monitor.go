@@ -166,6 +166,10 @@ func forwardUnsentPosts(store *PostStore, cfg Config) {
 		if strings.TrimSpace(post.VideoURL) != "" {
 			caption := "<b>" + post.Username + " 发布了新视频:</b>\n\n" + htmlEscape(post.Content) + "\n\n<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
 			ok, message = sendTelegramVideo(cfg, post.VideoURL, caption)
+			if !ok {
+				log.Printf("telegram video send failed for %s: %s, falling back to text", post.ID, message)
+				ok, message = sendTelegramHTMLMessage(cfg, buildVideoFallbackText(post))
+			}
 		} else {
 			ok, message = forwardPostToTelegram(cfg, post)
 		}
@@ -189,4 +193,18 @@ func htmlEscape(value string) string {
 		"\"", "&quot;",
 	)
 	return replacer.Replace(value)
+}
+
+func buildVideoFallbackText(post Post) string {
+	text := "<b>来自: @" + htmlEscape(post.Username) + "</b>\n\n"
+	if strings.TrimSpace(post.Content) != "" {
+		text += htmlEscape(post.Content) + "\n\n"
+	}
+	if strings.TrimSpace(post.VideoURL) != "" {
+		text += htmlEscape(post.VideoURL) + "\n\n"
+	}
+	if strings.TrimSpace(post.WebURL) != "" {
+		text += "<a href='" + htmlEscape(post.WebURL) + "'>查看原文</a>"
+	}
+	return text
 }

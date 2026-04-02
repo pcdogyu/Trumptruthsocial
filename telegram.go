@@ -131,11 +131,11 @@ func sendTelegramMessageWithReplyMarkup(cfg Config, text, parseMode string, repl
 				time.Sleep(retryAfter)
 				continue
 			}
-			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+			return false, telegramHTTPErrorMessage(resp.Status, respBody)
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+			return false, telegramHTTPErrorMessage(resp.Status, respBody)
 		}
 
 		var result map[string]any
@@ -208,7 +208,11 @@ func sendTelegramVideo(cfg Config, videoURL, caption string) (bool, string) {
 				time.Sleep(retryAfter)
 				continue
 			}
-			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+			return false, telegramHTTPErrorMessage(resp.Status, respBody)
+		}
+
+		if resp.StatusCode == http.StatusBadRequest {
+			return false, telegramHTTPErrorMessage(resp.Status, respBody)
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -216,7 +220,7 @@ func sendTelegramVideo(cfg Config, videoURL, caption string) (bool, string) {
 				time.Sleep(telegramSendGap)
 				continue
 			}
-			return false, fmt.Sprintf("Telegram API HTTP 状态码: %s", resp.Status)
+			return false, telegramHTTPErrorMessage(resp.Status, respBody)
 		}
 
 		var result map[string]any
@@ -253,6 +257,18 @@ func telegramRetryAfter(body []byte) time.Duration {
 		return time.Duration(result.Parameters.RetryAfter) * time.Second
 	}
 	return 0
+}
+
+func telegramHTTPErrorMessage(status string, body []byte) string {
+	var result struct {
+		Description string `json:"description"`
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &result); err == nil && strings.TrimSpace(result.Description) != "" {
+			return fmt.Sprintf("Telegram API HTTP 状态码: %s, 详情: %s", status, result.Description)
+		}
+	}
+	return fmt.Sprintf("Telegram API HTTP 状态码: %s", status)
 }
 
 func extractYouTubeURL(text string) string {
