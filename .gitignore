@@ -19,6 +19,10 @@ config.yaml
 monitor.db
 posts.json
 
+# PEM keys / certificates
+/pem/
+*.pem
+
 # Go runtime artifacts and logs
 go.log
 go-*.log.gz
