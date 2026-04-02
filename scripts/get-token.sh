@@ -8,6 +8,35 @@ log() {
   printf '%s\n' "$*" >&2
 }
 
+ensure_browser_installed() {
+  if find_browser >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v snap >/dev/null 2>&1; then
+    log "no browser found; installing Chromium snap"
+    snap install chromium >/dev/null
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_xvfb_installed() {
+  if command -v xvfb-run >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    log "xvfb-run not found; installing xvfb"
+    apt-get update >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb >/dev/null
+    return 0
+  fi
+
+  return 1
+}
+
 find_browser() {
   local override candidate
 
@@ -80,16 +109,29 @@ else
   exit 1
 fi
 
-if browser_path="$(find_browser)"; then
-  export TRUTHSOCIAL_CHROME_PATH="$browser_path"
-  log "using browser: $TRUTHSOCIAL_CHROME_PATH"
-else
-  log "error: no Chrome/Chromium/Edge executable found"
-  log "set TRUTHSOCIAL_CHROME_PATH=/full/path/to/browser if it is installed"
-  exit 1
+if ! browser_path="$(find_browser)"; then
+  if ! ensure_browser_installed; then
+    log "error: no Chrome/Chromium/Edge executable found"
+    log "set TRUTHSOCIAL_CHROME_PATH=/full/path/to/browser if it is installed"
+    exit 1
+  fi
+  browser_path="$(find_browser)" || {
+    log "error: browser installation completed but no executable was detected"
+    exit 1
+  }
 fi
 
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(command -v xvfb-run || true)" != "" ]]; then
+if [[ -n "$browser_path" ]]; then
+  export TRUTHSOCIAL_CHROME_PATH="$browser_path"
+  log "using browser: $TRUTHSOCIAL_CHROME_PATH"
+fi
+
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  if ! ensure_xvfb_installed; then
+    log "no display detected and xvfb-run is unavailable"
+    log "install xvfb or run the script from a graphical session"
+    exit 1
+  fi
   log "no display detected; running token login under xvfb-run"
   exec xvfb-run -a "${TOKEN_CMD[@]}" "$@"
 fi
