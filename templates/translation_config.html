@@ -82,24 +82,47 @@
 </div>
 
 <main role="main" class="container page-shell">
-    <h1 class="mt-5">AI 配置</h1>
-    <form method="POST" action="/ai_config/save">
-        <fieldset class="form-group border p-3 mb-3">
-            <legend class="w-auto px-2">AI 分析设置</legend>
-            <div class="form-group form-check">
-                <input type="checkbox" class="form-check-input" id="ai_enabled" name="ai_enabled" {{if .Config.AIAnalysis.Enabled}}checked{{end}}>
-                <label class="form-check-label" for="ai_enabled">启用 AI 分析</label>
-            </div>
-            <div class="form-group">
-                <label for="ai_api_key">AI API Key:</label>
-                <input type="password" class="form-control" id="ai_api_key" name="ai_api_key" value="{{.AIApiKeyValue}}">
-            </div>
-            <div class="form-group">
-                <label for="ai_prompt">AI 分析提示词:</label>
-                <textarea class="form-control" id="ai_prompt" name="ai_prompt" rows="3">{{.Config.AIAnalysis.Prompt}}</textarea>
-            </div>
-        </fieldset>
-        <button type="submit" class="btn btn-primary">保存 AI 配置</button>
+    <h1 class="mt-5">翻译设置</h1>
+    {{if .Message}}
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        {{.Message}}
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+    </div>
+    {{end}}
+    <form method="POST" action="/translation_config/save">
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="translation_enabled" name="translation_enabled" {{if .Config.Translation.Enabled}}checked{{end}}>
+            <label class="form-check-label" for="translation_enabled">启用翻译</label>
+        </div>
+        <div class="form-group">
+            <label for="translation_api_url">翻译 API URL:</label>
+            <input type="text" class="form-control" id="translation_api_url" name="translation_api_url" value="{{.Config.Translation.APIURL}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_api_key">翻译 API Key:</label>
+            <input type="password" class="form-control" id="translation_api_key" name="translation_api_key" value="{{.TranslationAPIKeyValue}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_model">模型名称:</label>
+            <input type="text" class="form-control" id="translation_model" name="translation_model" value="{{.Config.Translation.Model}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_source_language">源语言:</label>
+            <input type="text" class="form-control" id="translation_source_language" name="translation_source_language" value="{{.Config.Translation.SourceLanguage}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_target_language">目标语言:</label>
+            <input type="text" class="form-control" id="translation_target_language" name="translation_target_language" value="{{.Config.Translation.TargetLanguage}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_timeout_seconds">请求超时（秒）:</label>
+            <input type="number" class="form-control" id="translation_timeout_seconds" name="translation_timeout_seconds" min="1" value="{{.Config.Translation.TimeoutSeconds}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_prompt">翻译提示词:</label>
+            <textarea class="form-control" id="translation_prompt" name="translation_prompt" rows="3">{{.Config.Translation.Prompt}}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">保存翻译设置</button>
     </form>
 </main>
 

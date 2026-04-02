@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -113,9 +114,9 @@ func (a *App) handleUpgradeLog(w http.ResponseWriter, r *http.Request) {
 }
 
 func launchUpgradeJob(scriptPath string) error {
-	systemdRun, err := exec.LookPath("systemd-run")
+	systemdRun, err := resolveSystemdRunPath()
 	if err != nil {
-		return fmt.Errorf("systemd-run not found: %w", err)
+		return err
 	}
 
 	workDir := filepath.Dir(scriptPath)
@@ -128,10 +129,39 @@ func launchUpgradeJob(scriptPath string) error {
 		"/bin/bash",
 		scriptPath,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.Stdin = nil
-	return cmd.Run()
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		text := strings.TrimSpace(output.String())
+		if text != "" {
+			return fmt.Errorf("systemd-run 启动升级任务失败: %w: %s", err, text)
+		}
+		return fmt.Errorf("systemd-run 启动升级任务失败: %w", err)
+	}
+	return nil
+}
+
+func resolveSystemdRunPath() (string, error) {
+	candidates := []string{
+		"systemd-run",
+		"/usr/bin/systemd-run",
+		"/bin/systemd-run",
+		"/usr/sbin/systemd-run",
+	}
+	for _, candidate := range candidates {
+		if filepath.IsAbs(candidate) {
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, nil
+			}
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("未找到 systemd-run，请确认服务器已安装 systemd")
 }
 
 func resolveUpgradeScriptPath() (string, error) {

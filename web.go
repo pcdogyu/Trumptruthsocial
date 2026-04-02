@@ -30,6 +30,7 @@ func newApp(store *PostStore) (*App, error) {
 		filepath.Join("templates", "content.html"),
 		filepath.Join("templates", "message_push.html"),
 		filepath.Join("templates", "ai_config.html"),
+		filepath.Join("templates", "translation_config.html"),
 		filepath.Join("templates", "history.html"),
 	}
 
@@ -65,6 +66,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/upgrade/log", a.handleUpgradeLog)
 	mux.HandleFunc("/ai_config", a.handleAIConfig)
 	mux.HandleFunc("/ai_config/save", a.handleSaveAIConfig)
+	mux.HandleFunc("/translation_config", a.handleTranslationConfig)
+	mux.HandleFunc("/translation_config/save", a.handleSaveTranslationConfig)
 	mux.HandleFunc("/message_push", a.handleMessagePush)
 	mux.HandleFunc("/message_push/save", a.handleMessagePushSave)
 	mux.HandleFunc("/message_push/test", a.handleMessagePushTest)
@@ -409,6 +412,61 @@ func (a *App) handleAIConfig(w http.ResponseWriter, r *http.Request) {
 		AIApiKeyValue: secretOrBlank(cfg.AIAnalysis.APIKey),
 	}
 	a.render(w, "ai_config.html", data)
+}
+
+func (a *App) handleTranslationConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, _ := LoadConfig()
+	data := TranslationConfigPageData{
+		Title:                  "翻译设置",
+		ActivePage:             "translation",
+		Git:                    a.gitInfo,
+		Config:                 cfg,
+		TranslationAPIKeyValue: secretOrBlank(cfg.Translation.APIKey),
+	}
+	if r.URL.Query().Get("saved") != "" {
+		data.Message = "翻译设置已保存。"
+	}
+	a.render(w, "translation_config.html", data)
+}
+
+func (a *App) handleSaveTranslationConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	cfg, _ := LoadConfig()
+	cfg.Translation.Enabled = r.FormValue("translation_enabled") != ""
+	cfg.Translation.APIURL = strings.TrimSpace(r.FormValue("translation_api_url"))
+	apiKey := strings.TrimSpace(r.FormValue("translation_api_key"))
+	if apiKey != "" {
+		if apiKey == maskSecret(cfg.Translation.APIKey) {
+			apiKey = cfg.Translation.APIKey
+		}
+	}
+	cfg.Translation.APIKey = apiKey
+	cfg.Translation.Model = strings.TrimSpace(r.FormValue("translation_model"))
+	cfg.Translation.SourceLanguage = strings.TrimSpace(r.FormValue("translation_source_language"))
+	cfg.Translation.TargetLanguage = strings.TrimSpace(r.FormValue("translation_target_language"))
+	if timeoutSeconds, err := strconv.Atoi(strings.TrimSpace(r.FormValue("translation_timeout_seconds"))); err == nil {
+		cfg.Translation.TimeoutSeconds = timeoutSeconds
+	}
+	cfg.Translation.Prompt = strings.TrimSpace(r.FormValue("translation_prompt"))
+
+	if err := SaveConfig(cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("translation config saved")
+	http.Redirect(w, r, "/translation_config?saved=1", http.StatusSeeOther)
 }
 
 func (a *App) handleSaveAIConfig(w http.ResponseWriter, r *http.Request) {

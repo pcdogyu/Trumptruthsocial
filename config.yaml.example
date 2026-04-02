@@ -26,6 +26,16 @@ ai_analysis:
   api_key: "YOUR_AI_API_KEY"
   prompt: "Summarize the main point of the following text in one short sentence:"
 
+translation:
+  enabled: false
+  api_url: "YOUR_TRANSLATION_API_URL"
+  api_key: "YOUR_TRANSLATION_API_KEY"
+  model: "YOUR_TRANSLATION_MODEL"
+  source_language: "auto"
+  target_language: "zh-CN"
+  timeout_seconds: 30
+  prompt: "Translate the following text into the target language, preserving meaning and tone:"
+
 # 刷新间隔 (例如 "5m" 代表 5 分钟, "1h" 代表 1 小时)
 refresh_interval: "5m"
 

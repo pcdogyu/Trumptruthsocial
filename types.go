@@ -22,11 +22,23 @@ type AIAnalysisConfig struct {
 	Prompt  string `json:"prompt"`
 }
 
+type TranslationConfig struct {
+	Enabled        bool   `json:"enabled"`
+	APIURL         string `json:"api_url"`
+	APIKey         string `json:"api_key"`
+	Model          string `json:"model"`
+	SourceLanguage string `json:"source_language"`
+	TargetLanguage string `json:"target_language"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Prompt         string `json:"prompt"`
+}
+
 type Config struct {
 	AccountsToMonitor []string          `json:"accounts_to_monitor"`
 	Auth              AuthConfig        `json:"auth"`
 	Telegram          TelegramConfig    `json:"telegram"`
 	AIAnalysis        AIAnalysisConfig  `json:"ai_analysis"`
+	Translation       TranslationConfig `json:"translation"`
 	RefreshInterval   string            `json:"refresh_interval"`
 	Selectors         map[string]string `json:"selectors"`
 }
@@ -96,6 +108,15 @@ type AIConfigPageData struct {
 	Git           GitInfo
 	Config        Config
 	AIApiKeyValue string
+}
+
+type TranslationConfigPageData struct {
+	Title                  string
+	ActivePage             string
+	Git                    GitInfo
+	Message                string
+	Config                 Config
+	TranslationAPIKeyValue string
 }
 
 type SyncResponse struct {

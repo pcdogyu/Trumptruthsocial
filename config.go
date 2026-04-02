@@ -31,6 +31,16 @@ func defaultConfig() Config {
 			APIKey:  "YOUR_AI_API_KEY",
 			Prompt:  "Summarize the main point of the following text in one short sentence:",
 		},
+		Translation: TranslationConfig{
+			Enabled:        false,
+			APIURL:         "YOUR_TRANSLATION_API_URL",
+			APIKey:         "YOUR_TRANSLATION_API_KEY",
+			Model:          "YOUR_TRANSLATION_MODEL",
+			SourceLanguage: "auto",
+			TargetLanguage: "zh-CN",
+			TimeoutSeconds: 30,
+			Prompt:         "Translate the following text into the target language, preserving meaning and tone:",
+		},
 		RefreshInterval: "5m",
 		Selectors: map[string]string{
 			"post_container":           "div.status[data-id], article[data-id], div[data-id]",
@@ -183,6 +193,36 @@ func SaveConfig(cfg Config) error {
 	b.WriteString(quoteIfNeeded(cfg.AIAnalysis.Prompt))
 	b.WriteString("\n\n")
 
+	b.WriteString("translation:\n")
+	b.WriteString("  enabled: ")
+	if cfg.Translation.Enabled {
+		b.WriteString("true")
+	} else {
+		b.WriteString("false")
+	}
+	b.WriteString("\n")
+	b.WriteString("  api_url: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.APIURL))
+	b.WriteString("\n")
+	b.WriteString("  api_key: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.APIKey))
+	b.WriteString("\n")
+	b.WriteString("  model: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.Model))
+	b.WriteString("\n")
+	b.WriteString("  source_language: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.SourceLanguage))
+	b.WriteString("\n")
+	b.WriteString("  target_language: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.TargetLanguage))
+	b.WriteString("\n")
+	b.WriteString("  timeout_seconds: ")
+	b.WriteString(strconv.Itoa(cfg.Translation.TimeoutSeconds))
+	b.WriteString("\n")
+	b.WriteString("  prompt: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.Prompt))
+	b.WriteString("\n\n")
+
 	b.WriteString("refresh_interval: ")
 	b.WriteString(quoteIfNeeded(cfg.RefreshInterval))
 	b.WriteString("\n\n")
@@ -256,6 +296,27 @@ func applySectionValue(cfg *Config, section, key, value string) {
 			cfg.AIAnalysis.APIKey = unquote(value)
 		case "prompt":
 			cfg.AIAnalysis.Prompt = unquote(value)
+		}
+	case "translation":
+		switch key {
+		case "enabled":
+			cfg.Translation.Enabled = parseBool(value)
+		case "api_url":
+			cfg.Translation.APIURL = unquote(value)
+		case "api_key":
+			cfg.Translation.APIKey = unquote(value)
+		case "model":
+			cfg.Translation.Model = unquote(value)
+		case "source_language":
+			cfg.Translation.SourceLanguage = unquote(value)
+		case "target_language":
+			cfg.Translation.TargetLanguage = unquote(value)
+		case "timeout_seconds":
+			if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+				cfg.Translation.TimeoutSeconds = n
+			}
+		case "prompt":
+			cfg.Translation.Prompt = unquote(value)
 		}
 	case "selectors":
 		if cfg.Selectors == nil {
