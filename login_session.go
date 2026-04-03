@@ -33,7 +33,7 @@ const (
 	loginSessionHeight         = 900
 	loginSessionPollInterval   = 2 * time.Second
 	loginSessionProfilePoll    = 5 * time.Second
-	loginSessionDebugWarmup    = 12 * time.Second
+	loginSessionDebugWarmup    = 30 * time.Second
 	loginSessionTimeout        = 15 * time.Minute
 	loginSessionCleanupDelay   = 2 * time.Minute
 	loginSessionDisplayStart   = 80
