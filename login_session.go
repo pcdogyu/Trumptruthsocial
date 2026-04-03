@@ -253,7 +253,7 @@ func newLoginSession(username string) (*LoginSession, error) {
 		return nil, err
 	}
 
-	return &LoginSession{
+	sess := &LoginSession{
 		ID:           randID("login"),
 		Username:     username,
 		SessionKind:  "login",
@@ -269,7 +269,9 @@ func newLoginSession(username string) (*LoginSession, error) {
 		state:        LoginSessionStarting,
 		message:      "正在启动远程登录窗口...",
 		done:         make(chan struct{}),
-	}, nil
+	}
+	debugf("login session allocated: id=%s username=%s display=%d vnc_port=%d debug_port=%d chromium=%s profile_dir=%s extension_dir=%s", sess.ID, username, display, vncPort, debugPort, chromiumPath, profileDir, extensionDir)
+	return sess, nil
 }
 
 func newDesktopSession() (*LoginSession, error) {
@@ -282,10 +284,12 @@ func newDesktopSession() (*LoginSession, error) {
 	sess.CaptureToken = false
 	sess.LoginURL = loginSessionDesktopURL
 	sess.message = "正在启动服务器远程桌面..."
+	debugf("desktop session converted from login session: id=%s display=%d vnc_port=%d debug_port=%d chromium=%s", sess.ID, sess.Display, sess.VNCPort, sess.DebugPort, sess.Chromium)
 	return sess, nil
 }
 
 func (s *LoginSession) start() error {
+	debugf("login session start requested: id=%s kind=%s capture_token=%t login_url=%s", s.ID, s.SessionKind, s.CaptureToken, s.LoginURL)
 	if err := ensureX11VNCInstalled(); err != nil {
 		s.setError(fmt.Errorf("启动远程登录窗口失败: %w", err))
 		s.cleanup()
@@ -317,18 +321,21 @@ func (s *LoginSession) start() error {
 	} else {
 		s.setRunning("服务器远程桌面已打开，请在远程桌面中的浏览器里手动登录。")
 	}
+	debugf("login session start finished: id=%s kind=%s state=%s", s.ID, s.SessionKind, s.State())
 	return nil
 }
 
 func (s *LoginSession) startXvfb() error {
 	displayArg := ":" + strconv.Itoa(s.Display)
 	cmd := exec.Command("Xvfb", displayArg, "-screen", "0", fmt.Sprintf("%dx%dx24", loginSessionWidth, loginSessionHeight), "-ac", "-nolisten", "tcp")
+	debugf("login session starting Xvfb: id=%s cmd=%q args=%q", s.ID, cmd.Path, cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	s.xvfbCmd = cmd
+	debugf("login session Xvfb started: id=%s pid=%d display=%s", s.ID, cmd.Process.Pid, displayArg)
 	go s.waitOnProcess("Xvfb", cmd)
 	return nil
 }
@@ -346,6 +353,7 @@ func (s *LoginSession) startX11VNC() error {
 		"-noxfixes",
 		"-noxrecord",
 	)
+	debugf("login session starting x11vnc: id=%s cmd=%q args=%q", s.ID, cmd.Path, cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "DISPLAY="+displayArg)
@@ -353,6 +361,7 @@ func (s *LoginSession) startX11VNC() error {
 		return err
 	}
 	s.x11vncCmd = cmd
+	debugf("login session x11vnc started: id=%s pid=%d display=%s port=%d", s.ID, cmd.Process.Pid, displayArg, s.VNCPort)
 	go s.waitOnProcess("x11vnc", cmd)
 	return nil
 }
@@ -371,6 +380,7 @@ func (s *LoginSession) startChromium() error {
 		return err
 	}
 	log.Printf("truthsocial %s browser ready: session=%s profile_dir=%s debug_port=%d", s.SessionKind, s.ID, s.ProfileDir, s.DebugPort)
+	debugf("login session runtime prepared: id=%s runtime_dir=%s display=%s chromium=%s", s.ID, runtimeDir, displayArg, s.Chromium)
 
 	args := []string{
 		"--no-first-run",
@@ -388,12 +398,15 @@ func (s *LoginSession) startChromium() error {
 		s.LoginURL,
 	}
 	var cmd *exec.Cmd
-	if shouldUseDBusRunSession(s.Chromium) {
+	useDBusRunSession := shouldUseDBusRunSession(s.Chromium)
+	debugf("login session chromium launch mode: id=%s use_dbus_run_session=%t", s.ID, useDBusRunSession)
+	if useDBusRunSession {
 		args = append([]string{"--", s.Chromium}, args...)
 		cmd = exec.Command("dbus-run-session", args...)
 	} else {
 		cmd = exec.Command(s.Chromium, args...)
 	}
+	debugf("login session starting chromium: id=%s cmd=%q args=%q", s.ID, cmd.Path, cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),
@@ -404,14 +417,18 @@ func (s *LoginSession) startChromium() error {
 		return err
 	}
 	s.chromeCmd = cmd
+	debugf("login session chromium started: id=%s pid=%d", s.ID, cmd.Process.Pid)
 	go s.waitOnProcess("chromium", cmd)
 	return nil
 }
 
 func (s *LoginSession) waitOnProcess(name string, cmd *exec.Cmd) {
+	debugf("login session process wait begin: session=%s process=%s pid=%d", s.ID, name, cmd.Process.Pid)
 	if err := cmd.Wait(); err != nil {
 		debugf("login session process exited: session=%s process=%s err=%v", s.ID, name, err)
+		return
 	}
+	debugf("login session process exited cleanly: session=%s process=%s", s.ID, name)
 }
 
 func (s *LoginSession) monitor() {
@@ -430,12 +447,14 @@ func (s *LoginSession) monitor() {
 		}
 
 		if time.Now().After(deadline) {
+			debugf("login session monitor timeout: session=%s deadline=%s", s.ID, deadline.Format(time.RFC3339))
 			s.setError(errors.New("登录会话超时，请重新打开登录窗口。"))
 			return
 		}
 
 		if s.CaptureToken && time.Since(lastProfileCaptureAttempt) >= loginSessionProfilePoll {
 			lastProfileCaptureAttempt = time.Now()
+			debugf("login session capture tick: session=%s elapsed=%s", s.ID, time.Since(s.StartedAt).Round(time.Second))
 			captured, err := s.tryCaptureFromProfile()
 			if captured {
 				lastProfileCaptureError = ""
@@ -467,17 +486,21 @@ func (s *LoginSession) monitor() {
 }
 
 func (s *LoginSession) tryCaptureFromProfile() (bool, error) {
+	debugf("login session capture begin: session=%s", s.ID)
 	token, cookies, err := s.attachAndReadCookieData()
 	if err != nil {
+		debugf("login session capture read failed: session=%s err=%v", s.ID, err)
 		return false, err
 	}
 
 	token = strings.TrimSpace(token)
 	if token == "" {
+		debugf("login session capture empty token: session=%s cookies=%d", s.ID, len(cookies))
 		return false, fmt.Errorf("token not found in browser profile yet")
 	}
 
 	if err := persistBearerToken(token); err != nil {
+		debugf("login session persist bearer token failed: session=%s err=%v", s.ID, err)
 		return false, err
 	}
 	if err := persistLoginSessionData(s.ID, s.Username, token, cookies); err != nil {
@@ -491,24 +514,30 @@ func (s *LoginSession) tryCaptureFromProfile() (bool, error) {
 
 func (s *LoginSession) stop() {
 	s.closeOnce.Do(func() {
+		debugf("login session stop signalled: session=%s", s.ID)
 		close(s.done)
 	})
 }
 
 func (s *LoginSession) cleanup() {
+	debugf("login session cleanup begin: session=%s", s.ID)
 	s.stop()
 	if s.chromeCmd != nil && s.chromeCmd.Process != nil {
+		debugf("login session cleanup killing chromium: session=%s pid=%d", s.ID, s.chromeCmd.Process.Pid)
 		_ = s.chromeCmd.Process.Kill()
 	}
 	if s.x11vncCmd != nil && s.x11vncCmd.Process != nil {
+		debugf("login session cleanup killing x11vnc: session=%s pid=%d", s.ID, s.x11vncCmd.Process.Pid)
 		_ = s.x11vncCmd.Process.Kill()
 	}
 	if s.xvfbCmd != nil && s.xvfbCmd.Process != nil {
+		debugf("login session cleanup killing Xvfb: session=%s pid=%d", s.ID, s.xvfbCmd.Process.Pid)
 		_ = s.xvfbCmd.Process.Kill()
 	}
 	_ = os.RemoveAll(s.ProfileDir)
 	_ = os.RemoveAll(s.ExtensionDir)
 	_ = os.RemoveAll(filepath.Join(os.TempDir(), "truthsocial-runtime-"+s.ID))
+	debugf("login session cleanup paths removed: session=%s profile_dir=%s extension_dir=%s", s.ID, s.ProfileDir, s.ExtensionDir)
 	s.markClosed("登录会话已关闭。")
 }
 
@@ -517,6 +546,7 @@ func (s *LoginSession) setRunning(message string) {
 	defer s.mu.Unlock()
 	s.state = LoginSessionRunning
 	s.message = message
+	debugf("login session state changed: session=%s state=%s message=%s", s.ID, s.state, message)
 }
 
 func (s *LoginSession) setSuccess(token string, cookies []CapturedCookie) {
@@ -530,6 +560,7 @@ func (s *LoginSession) setSuccess(token string, cookies []CapturedCookie) {
 	}
 	s.token = token
 	s.cookies = cookies
+	debugf("login session state changed: session=%s state=%s token=%s cookies=%d", s.ID, s.state, maskToken(token), len(cookies))
 }
 
 func (s *LoginSession) setToken(token string, cookies []CapturedCookie) {
@@ -537,6 +568,7 @@ func (s *LoginSession) setToken(token string, cookies []CapturedCookie) {
 	defer s.mu.Unlock()
 	s.token = token
 	s.cookies = cookies
+	debugf("login session token updated: session=%s token=%s cookies=%d", s.ID, maskToken(token), len(cookies))
 }
 
 func (s *LoginSession) setError(err error) {
@@ -544,6 +576,7 @@ func (s *LoginSession) setError(err error) {
 	defer s.mu.Unlock()
 	s.state = LoginSessionError
 	s.message = err.Error()
+	debugf("login session state changed: session=%s state=%s error=%v", s.ID, s.state, err)
 }
 
 func (s *LoginSession) markClosed(message string) {
@@ -555,6 +588,7 @@ func (s *LoginSession) markClosed(message string) {
 	if message != "" {
 		s.message = message
 	}
+	debugf("login session marked closed: session=%s state=%s message=%s", s.ID, s.state, s.message)
 }
 
 func (s *LoginSession) State() LoginSessionState {
@@ -592,20 +626,24 @@ func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, erro
 	if !s.CaptureToken {
 		return "", nil, fmt.Errorf("token capture disabled for desktop session")
 	}
+	debugf("login session capture source select: session=%s debug_port=%d warmup_elapsed=%s", s.ID, s.DebugPort, time.Since(s.StartedAt).Round(time.Second))
 
 	profileToken, profileCookies, profileErr := readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 	profileToken = strings.TrimSpace(profileToken)
 	if profileErr == nil && profileToken != "" {
+		debugf("login session capture source hit profile: session=%s token=%s cookies=%d", s.ID, maskToken(profileToken), len(profileCookies))
 		return profileToken, profileCookies, nil
 	}
 
 	if s.DebugPort <= 0 {
+		debugf("login session capture source no debug port: session=%s profile_err=%v", s.ID, profileErr)
 		if profileErr != nil {
 			return "", nil, profileErr
 		}
 		return "", profileCookies, fmt.Errorf("token not found in browser profile yet")
 	}
 	if time.Since(s.StartedAt) < loginSessionDebugWarmup {
+		debugf("login session capture source waiting for debug warmup: session=%s warmup=%s", s.ID, loginSessionDebugWarmup)
 		if profileErr != nil {
 			return "", nil, profileErr
 		}
@@ -615,6 +653,7 @@ func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, erro
 	debugToken, debugCookies, debugErr := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
 	debugToken = strings.TrimSpace(debugToken)
 	if debugErr == nil && debugToken != "" {
+		debugf("login session capture source hit remote debug: session=%s token=%s cookies=%d", s.ID, maskToken(debugToken), len(debugCookies))
 		return debugToken, debugCookies, nil
 	}
 
@@ -629,18 +668,23 @@ func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, erro
 
 func shouldUseDBusRunSession(browserPath string) bool {
 	if strings.TrimSpace(browserPath) == "" {
+		debugf("login session dbus wrapper skipped: empty browser path")
 		return false
 	}
 	normalized := filepath.Clean(strings.ToLower(browserPath))
 	if strings.Contains(normalized, "/snap/bin/") || strings.HasPrefix(normalized, `\snap\bin\`) {
+		debugf("login session dbus wrapper skipped for snap browser: browser=%s", browserPath)
 		return false
 	}
 	if !strings.Contains(strings.ToLower(browserPath), "chromium") {
+		debugf("login session dbus wrapper skipped: non-chromium browser=%s", browserPath)
 		return false
 	}
 	if _, err := exec.LookPath("dbus-run-session"); err != nil {
+		debugf("login session dbus wrapper unavailable: browser=%s err=%v", browserPath, err)
 		return false
 	}
+	debugf("login session dbus wrapper enabled: browser=%s", browserPath)
 	return true
 }
 
@@ -847,6 +891,7 @@ func readTokenAndCookiesFromProfileDir(userDataDir, loginURL string) (string, []
 	account := extractUsernameFromEntry(loginURL)
 	var token string
 	var cookies []CapturedCookie
+	debugf("profile token capture begin: account=%s profile_dir=%s login_url=%s", account, userDataDir, loginURL)
 
 	err := runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
 		if err := chromedp.Run(ctx,
@@ -888,10 +933,12 @@ func readTokenAndCookiesFromProfileDir(userDataDir, loginURL string) (string, []
 		return nil
 	})
 	if err != nil {
+		debugf("profile token capture failed: account=%s profile_dir=%s err=%v", account, userDataDir, err)
 		return "", nil, fmt.Errorf("profile token capture failed for %s: %w", account, err)
 	}
-
-	return strings.TrimSpace(token), cookies, nil
+	token = strings.TrimSpace(token)
+	debugf("profile token capture finished: account=%s token=%s cookies=%d", account, maskToken(token), len(cookies))
+	return token, cookies, nil
 }
 
 func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, []CapturedCookie, error) {
@@ -899,8 +946,10 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 	if debugPort <= 0 {
 		return "", nil, fmt.Errorf("remote debug port is unavailable")
 	}
+	debugf("remote debug token capture begin: account=%s debug_port=%d login_url=%s", account, debugPort, loginURL)
 
 	allocatorURL := fmt.Sprintf("http://%s:%d", loginSessionBrowserAddress, debugPort)
+	debugf("remote debug allocator url: account=%s url=%s", account, allocatorURL)
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), allocatorURL)
 	defer allocCancel()
 
@@ -912,8 +961,10 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 
 	targetID, err := selectTruthSocialTargetID(ctx)
 	if err != nil {
+		debugf("remote debug token capture target selection failed: account=%s err=%v", account, err)
 		return "", nil, fmt.Errorf("remote debug target selection failed for %s: %w", account, err)
 	}
+	debugf("remote debug token capture target selected: account=%s target_id=%s", account, targetID)
 
 	targetCtx, targetCancel := chromedp.NewContext(ctx, chromedp.WithTargetID(targetID))
 	defer targetCancel()
@@ -958,10 +1009,12 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 		}),
 	)
 	if err != nil {
+		debugf("remote debug token capture failed: account=%s debug_port=%d err=%v", account, debugPort, err)
 		return "", nil, fmt.Errorf("remote debug token capture failed for %s: %w", account, err)
 	}
-
-	return strings.TrimSpace(token), cookies, nil
+	token = strings.TrimSpace(token)
+	debugf("remote debug token capture finished: account=%s token=%s cookies=%d", account, maskToken(token), len(cookies))
+	return token, cookies, nil
 }
 
 func selectTruthSocialTargetID(ctx context.Context) (target.ID, error) {
@@ -969,12 +1022,14 @@ func selectTruthSocialTargetID(ctx context.Context) (target.ID, error) {
 	if err != nil {
 		return "", err
 	}
+	debugf("remote debug target scan: targets=%d", len(targets))
 
 	var fallback target.ID
 	for _, info := range targets {
 		if info == nil || info.Type != "page" {
 			continue
 		}
+		debugf("remote debug target candidate: target_id=%s url=%s type=%s", info.TargetID, info.URL, info.Type)
 		if fallback == "" {
 			fallback = info.TargetID
 		}
@@ -984,6 +1039,7 @@ func selectTruthSocialTargetID(ctx context.Context) (target.ID, error) {
 		}
 	}
 	if fallback != "" {
+		debugf("remote debug target fallback selected: target_id=%s", fallback)
 		return fallback, nil
 	}
 	return "", fmt.Errorf("no page target found")
@@ -1025,6 +1081,7 @@ func freeTCPPort() (int, error) {
 
 func ensureX11VNCInstalled() error {
 	if _, err := exec.LookPath("x11vnc"); err == nil {
+		debugf("x11vnc already installed")
 		return nil
 	}
 	if _, err := exec.LookPath("apt-get"); err != nil {
@@ -1057,6 +1114,7 @@ func randID(prefix string) string {
 }
 
 func (s *LoginSession) VNCWebSocketHandler(w http.ResponseWriter, r *http.Request) {
+	debugf("login session websocket proxy start: session=%s vnc_port=%d remote=%s", s.ID, s.VNCPort, r.RemoteAddr)
 	conn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
 		log.Printf("login session websocket upgrade failed: %v", err)
@@ -1069,6 +1127,7 @@ func (s *LoginSession) VNCWebSocketHandler(w http.ResponseWriter, r *http.Reques
 		log.Printf("login session vnc dial failed: %v", err)
 		return
 	}
+	debugf("login session websocket proxy connected: session=%s backend=%s:%d", s.ID, loginSessionVNCListenHost, s.VNCPort)
 	defer backend.Close()
 
 	errCh := make(chan error, 2)
