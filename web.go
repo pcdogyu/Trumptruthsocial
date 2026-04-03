@@ -102,13 +102,14 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, _ := LoadConfig()
 	data := IndexPageData{
-		Title:            "配置",
-		ActivePage:       "config",
-		Git:              a.gitInfo,
-		Config:           cfg,
-		AccountsText:     strings.Join(cfg.AccountsToMonitor, "\n"),
-		BearerTokenValue: maskSecret(cfg.Auth.BearerToken),
-		AIApiKeyValue:    secretOrBlank(cfg.AIAnalysis.APIKey),
+		Title:                    "配置",
+		ActivePage:               "config",
+		Git:                      a.gitInfo,
+		Config:                   cfg,
+		AccountsText:             strings.Join(cfg.AccountsToMonitor, "\n"),
+		BearerTokenValue:         maskSecret(cfg.Auth.BearerToken),
+		TruthSocialPasswordValue: secretOrBlank(cfg.Auth.TruthSocialPassword),
+		AIApiKeyValue:            secretOrBlank(cfg.AIAnalysis.APIKey),
 	}
 	if r.URL.Query().Get("saved") != "" {
 		data.Message = "配置已保存。"
@@ -135,6 +136,7 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	rotateBearerTokens(&cfg, bearerToken)
 	cfg.Auth.TruthSocialUsername = strings.TrimSpace(r.FormValue("truthsocial_username"))
+	cfg.Auth.TruthSocialPassword = r.FormValue("truthsocial_password")
 	if validityDays, err := strconv.Atoi(strings.TrimSpace(r.FormValue("bearer_token_validity_days"))); err == nil {
 		cfg.Auth.BearerTokenValidityDays = validityDays
 	}
@@ -163,9 +165,13 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = strings.TrimSpace(cfg.Auth.TruthSocialUsername)
 	}
+	password := r.FormValue("truthsocial_password")
+	if password == "" {
+		password = cfg.Auth.TruthSocialPassword
+	}
 	log.Printf("truthsocial login requested via web ui: username=@%s", username)
 
-	session, err := a.loginSessions.Start(username)
+	session, err := a.loginSessions.Start(username, password)
 	if err != nil {
 		log.Printf("truthsocial login session start failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})

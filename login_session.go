@@ -68,6 +68,7 @@ const (
 type LoginSession struct {
 	ID           string
 	Username     string
+	Password     string
 	SessionKind  string
 	CaptureToken bool
 	ProfileDir   string
@@ -103,7 +104,7 @@ func newLoginSessionManager() *LoginSessionManager {
 	}
 }
 
-func (m *LoginSessionManager) Start(username string) (*LoginSession, error) {
+func (m *LoginSessionManager) Start(username, password string) (*LoginSession, error) {
 	m.mu.Lock()
 	var staleSessions []*LoginSession
 	for id, s := range m.sessions {
@@ -129,7 +130,7 @@ func (m *LoginSessionManager) Start(username string) (*LoginSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sess, err := newLoginSession(username)
+	sess, err := newLoginSession(username, password)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func (m *LoginSessionManager) remove(id string) {
 	delete(m.sessions, id)
 }
 
-func newLoginSession(username string) (*LoginSession, error) {
+func newLoginSession(username, password string) (*LoginSession, error) {
 	display, err := chooseDisplayNumber()
 	if err != nil {
 		return nil, err
@@ -256,6 +257,7 @@ func newLoginSession(username string) (*LoginSession, error) {
 	sess := &LoginSession{
 		ID:           randID("login"),
 		Username:     username,
+		Password:     password,
 		SessionKind:  "login",
 		CaptureToken: true,
 		ProfileDir:   profileDir,
@@ -270,12 +272,12 @@ func newLoginSession(username string) (*LoginSession, error) {
 		message:      "正在启动远程登录窗口...",
 		done:         make(chan struct{}),
 	}
-	debugf("login session allocated: id=%s username=%s display=%d vnc_port=%d debug_port=%d chromium=%s profile_dir=%s extension_dir=%s", sess.ID, username, display, vncPort, debugPort, chromiumPath, profileDir, extensionDir)
+	debugf("login session allocated: id=%s username=%s password_set=%t display=%d vnc_port=%d debug_port=%d chromium=%s profile_dir=%s extension_dir=%s", sess.ID, username, strings.TrimSpace(password) != "", display, vncPort, debugPort, chromiumPath, profileDir, extensionDir)
 	return sess, nil
 }
 
 func newDesktopSession() (*LoginSession, error) {
-	sess, err := newLoginSession("")
+	sess, err := newLoginSession("", "")
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +322,9 @@ func (s *LoginSession) start() error {
 		s.setRunning("远程登录窗口已打开，请在弹出的窗口中完成 Truth Social 登录。")
 	} else {
 		s.setRunning("服务器远程桌面已打开，请在远程桌面中的浏览器里手动登录。")
+	}
+	if s.CaptureToken && strings.TrimSpace(s.Username) != "" && strings.TrimSpace(s.Password) != "" {
+		go s.runCredentialLogin()
 	}
 	debugf("login session start finished: id=%s kind=%s state=%s", s.ID, s.SessionKind, s.State())
 	return nil
@@ -483,6 +488,45 @@ func (s *LoginSession) monitor() {
 			time.Sleep(loginSessionPollInterval)
 		}
 	}
+}
+
+func (s *LoginSession) runCredentialLogin() {
+	debugf("login session credential automation scheduled: session=%s username=%s", s.ID, s.Username)
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case <-s.done:
+			debugf("login session credential automation stopped: session=%s reason=done", s.ID)
+			return
+		default:
+		}
+
+		state := s.State()
+		if state == LoginSessionSuccess || state == LoginSessionError || state == LoginSessionClosed {
+			debugf("login session credential automation stopped: session=%s state=%s", s.ID, state)
+			return
+		}
+
+		if s.DebugPort <= 0 {
+			debugf("login session credential automation waiting for debug port: session=%s", s.ID)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		submitted, pageURL, err := submitTruthSocialCredentialsViaDebugPort(s.DebugPort, s.Username, s.Password)
+		if err != nil {
+			debugf("login session credential automation pending: session=%s err=%v", s.ID, err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		if submitted {
+			log.Printf("truthsocial credential login submitted: session=%s page=%s", s.ID, pageURL)
+			return
+		}
+		debugf("login session credential automation no form found yet: session=%s page=%s", s.ID, pageURL)
+		time.Sleep(5 * time.Second)
+	}
+	debugf("login session credential automation timeout: session=%s", s.ID)
 }
 
 func (s *LoginSession) tryCaptureFromProfile() (bool, error) {
@@ -1015,6 +1059,88 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 	token = strings.TrimSpace(token)
 	debugf("remote debug token capture finished: account=%s token=%s cookies=%d", account, maskToken(token), len(cookies))
 	return token, cookies, nil
+}
+
+func submitTruthSocialCredentialsViaDebugPort(debugPort int, username, password string) (bool, string, error) {
+	if debugPort <= 0 {
+		return false, "", fmt.Errorf("remote debug port is unavailable")
+	}
+	allocatorURL := fmt.Sprintf("http://%s:%d", loginSessionBrowserAddress, debugPort)
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), allocatorURL)
+	defer allocCancel()
+
+	ctx, ctxCancel := chromedp.NewContext(allocCtx)
+	defer ctxCancel()
+
+	ctx, timeoutCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer timeoutCancel()
+
+	targetID, err := selectTruthSocialTargetID(ctx)
+	if err != nil {
+		return false, "", fmt.Errorf("remote debug target selection failed: %w", err)
+	}
+
+	targetCtx, targetCancel := chromedp.NewContext(ctx, chromedp.WithTargetID(targetID))
+	defer targetCancel()
+
+	var result struct {
+		Submitted bool   `json:"submitted"`
+		PageURL   string `json:"page_url"`
+		Reason    string `json:"reason"`
+	}
+	js := fmt.Sprintf(`(() => {
+  const username = %q;
+  const password = %q;
+  const setValue = (el, value) => {
+    const proto = Object.getPrototypeOf(el);
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (descriptor && typeof descriptor.set === 'function') {
+      descriptor.set.call(el, value);
+    } else {
+      el.value = value;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  const pageURL = location.href || '';
+  const userInput = document.querySelector('input[name=\"username\"], input[autocomplete=\"username\"], input[type=\"email\"], input[type=\"text\"]');
+  const passInput = document.querySelector('input[name=\"password\"], input[autocomplete=\"current-password\"], input[type=\"password\"]');
+  if (!userInput || !passInput) {
+    return { submitted: false, page_url: pageURL, reason: 'login form not found' };
+  }
+
+  setValue(userInput, username);
+  setValue(passInput, password);
+
+  const candidates = Array.from(document.querySelectorAll('button, input[type=\"submit\"]'));
+  const submitButton = candidates.find((el) => {
+    const text = (el.innerText || el.value || '').trim().toLowerCase();
+    return /sign in|log in|login|继续|continue|submit/.test(text);
+  }) || userInput.form?.querySelector('button[type=\"submit\"], input[type=\"submit\"]') || passInput.form?.querySelector('button[type=\"submit\"], input[type=\"submit\"]');
+
+  if (submitButton) {
+    submitButton.click();
+    return { submitted: true, page_url: pageURL, reason: 'clicked submit button' };
+  }
+
+  if (passInput.form && typeof passInput.form.requestSubmit === 'function') {
+    passInput.form.requestSubmit();
+    return { submitted: true, page_url: pageURL, reason: 'requestSubmit' };
+  }
+
+  passInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+  passInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+  return { submitted: true, page_url: pageURL, reason: 'keyboard enter' };
+})()`, username, password)
+
+	if err := chromedp.Run(targetCtx, chromedp.Evaluate(js, &result)); err != nil {
+		return false, "", fmt.Errorf("credential submit failed: %w", err)
+	}
+	if result.Reason != "" {
+		debugf("truthsocial credential submit result: debug_port=%d submitted=%t page=%s reason=%s", debugPort, result.Submitted, result.PageURL, result.Reason)
+	}
+	return result.Submitted, result.PageURL, nil
 }
 
 func selectTruthSocialTargetID(ctx context.Context) (target.ID, error) {

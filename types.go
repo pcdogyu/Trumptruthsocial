@@ -9,6 +9,7 @@ type AuthConfig struct {
 	BearerTokenUpdatedAt    string `json:"bearer_token_updated_at"`
 	BearerTokenValidityDays int    `json:"bearer_token_validity_days"`
 	TruthSocialUsername     string `json:"truthsocial_username"`
+	TruthSocialPassword     string `json:"truthsocial_password"`
 }
 
 type TelegramConfig struct {
@@ -66,14 +67,15 @@ type GitInfo struct {
 }
 
 type IndexPageData struct {
-	Title            string
-	ActivePage       string
-	Git              GitInfo
-	Message          string
-	Config           Config
-	AccountsText     string
-	BearerTokenValue string
-	AIApiKeyValue    string
+	Title                    string
+	ActivePage               string
+	Git                      GitInfo
+	Message                  string
+	Config                   Config
+	AccountsText             string
+	BearerTokenValue         string
+	TruthSocialPasswordValue string
+	AIApiKeyValue            string
 }
 
 type ContentPageData struct {

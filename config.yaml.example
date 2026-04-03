@@ -14,6 +14,7 @@ auth:
   bearer_token_updated_at: ""
   bearer_token_validity_days: 5
   truthsocial_username: "YOUR_TRUTHSOCIAL_USERNAME" # 您在 Truth Social 的用户名
+  truthsocial_password: "" # 可选，点击“登录”时用于自动填充密码
 
 # Telegram 通知设置
 telegram:

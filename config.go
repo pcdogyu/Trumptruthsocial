@@ -168,6 +168,9 @@ func SaveConfig(cfg Config) error {
 	b.WriteString("\n")
 	b.WriteString("  truthsocial_username: ")
 	b.WriteString(quoteIfNeeded(cfg.Auth.TruthSocialUsername))
+	b.WriteString("\n")
+	b.WriteString("  truthsocial_password: ")
+	b.WriteString(quoteIfNeeded(cfg.Auth.TruthSocialPassword))
 	b.WriteString("\n\n")
 
 	b.WriteString("telegram:\n")
@@ -280,6 +283,8 @@ func applySectionValue(cfg *Config, section, key, value string) {
 			}
 		case "truthsocial_username":
 			cfg.Auth.TruthSocialUsername = unquote(value)
+		case "truthsocial_password":
+			cfg.Auth.TruthSocialPassword = unquote(value)
 		}
 	case "telegram":
 		switch key {
