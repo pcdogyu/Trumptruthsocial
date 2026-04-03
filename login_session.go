@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -306,14 +307,7 @@ func (s *LoginSession) startChromium() error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
-	if err := s.ensureCaptureExtension(); err != nil {
-		return err
-	}
-	manifestPath := filepath.Join(s.ExtensionDir, "manifest.json")
-	if _, err := os.Stat(manifestPath); err != nil {
-		return fmt.Errorf("扩展文件不存在或不可读: %s: %w", manifestPath, err)
-	}
-	log.Printf("truthsocial login extension ready: session=%s extension_dir=%s manifest=%s profile_dir=%s", s.ID, s.ExtensionDir, manifestPath, s.ProfileDir)
+	log.Printf("truthsocial login browser ready: session=%s profile_dir=%s debug_port=%d", s.ID, s.ProfileDir, s.DebugPort)
 
 	cmd := exec.Command(s.Chromium,
 		"--no-first-run",
@@ -323,8 +317,6 @@ func (s *LoginSession) startChromium() error {
 		"--disable-blink-features=AutomationControlled",
 		"--exclude-switches=enable-automation",
 		"--window-size="+strconv.Itoa(loginSessionWidth)+","+strconv.Itoa(loginSessionHeight),
-		"--disable-extensions-except="+s.ExtensionDir,
-		"--load-extension="+s.ExtensionDir,
 		"--user-data-dir="+s.ProfileDir,
 		"--remote-debugging-address="+loginSessionBrowserAddress,
 		"--remote-debugging-port="+strconv.Itoa(s.DebugPort),
@@ -797,10 +789,18 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 	ctx, timeoutCancel := context.WithTimeout(ctx, 45*time.Second)
 	defer timeoutCancel()
 
+	targetID, err := selectTruthSocialTargetID(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("remote debug target selection failed for %s: %w", account, err)
+	}
+
+	targetCtx, targetCancel := chromedp.NewContext(ctx, chromedp.WithTargetID(targetID))
+	defer targetCancel()
+
 	var token string
 	var cookies []CapturedCookie
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(loginURL),
+	err = chromedp.Run(targetCtx,
+		network.Enable(),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			if err := chromedp.Evaluate(`(function() {
@@ -841,6 +841,31 @@ func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, [
 	}
 
 	return strings.TrimSpace(token), cookies, nil
+}
+
+func selectTruthSocialTargetID(ctx context.Context) (target.ID, error) {
+	targets, err := chromedp.Targets(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var fallback target.ID
+	for _, info := range targets {
+		if info == nil || info.Type != "page" {
+			continue
+		}
+		if fallback == "" {
+			fallback = info.TargetID
+		}
+		url := strings.ToLower(strings.TrimSpace(info.URL))
+		if strings.Contains(url, "truthsocial.com") {
+			return info.TargetID, nil
+		}
+	}
+	if fallback != "" {
+		return fallback, nil
+	}
+	return "", fmt.Errorf("no page target found")
 }
 
 func cookieNames(cookies []CapturedCookie) []string {
