@@ -30,6 +30,7 @@ const (
 	loginSessionWidth          = 1280
 	loginSessionHeight         = 900
 	loginSessionPollInterval   = 2 * time.Second
+	loginSessionProfilePoll    = 5 * time.Second
 	loginSessionTimeout        = 15 * time.Minute
 	loginSessionCleanupDelay   = 2 * time.Minute
 	loginSessionDisplayStart   = 80
@@ -350,6 +351,8 @@ func (s *LoginSession) monitor() {
 	}()
 
 	deadline := time.Now().Add(loginSessionTimeout)
+	lastProfileCaptureAttempt := time.Time{}
+	lastProfileCaptureError := ""
 	for {
 		select {
 		case <-s.done:
@@ -361,6 +364,21 @@ func (s *LoginSession) monitor() {
 			s.setError(errors.New("登录会话超时，请重新打开登录窗口。"))
 			return
 		}
+
+		if time.Since(lastProfileCaptureAttempt) >= loginSessionProfilePoll {
+			lastProfileCaptureAttempt = time.Now()
+			captured, err := s.tryCaptureFromProfile()
+			if captured {
+				lastProfileCaptureError = ""
+			} else if err != nil {
+				errMsg := err.Error()
+				if errMsg != lastProfileCaptureError {
+					debugf("login session profile capture pending: session=%s err=%v", s.ID, err)
+					lastProfileCaptureError = errMsg
+				}
+			}
+		}
+
 		switch s.State() {
 		case LoginSessionSuccess:
 			go func(id string) {
@@ -377,6 +395,29 @@ func (s *LoginSession) monitor() {
 			time.Sleep(loginSessionPollInterval)
 		}
 	}
+}
+
+func (s *LoginSession) tryCaptureFromProfile() (bool, error) {
+	token, cookies, err := s.attachAndReadCookieData()
+	if err != nil {
+		return false, err
+	}
+
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false, fmt.Errorf("token not found in browser profile yet")
+	}
+
+	if err := persistBearerToken(token); err != nil {
+		return false, err
+	}
+	if err := persistLoginSessionData(s.ID, s.Username, token, cookies); err != nil {
+		log.Printf("truthsocial login profile capture persist data failed: session=%s err=%v", s.ID, err)
+	}
+
+	s.setSuccess(token, cookies)
+	log.Printf("truthsocial login capture received: session=%s source=profile cookies=%d", s.ID, len(cookies))
+	return true, nil
 }
 
 func (s *LoginSession) stop() {
