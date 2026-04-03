@@ -23,6 +23,21 @@ func browserTokenDiscoveryJS() string {
   return '';
 }
 
+function extractTruthSocialAuthToken(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return '';
+  }
+  try {
+    const auth = JSON.parse(raw);
+    const users = auth && auth.users ? auth.users : {};
+    const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+    const first = current || Object.values(users)[0] || null;
+    return normalizeTruthSocialToken(first && first.access_token ? first.access_token : '');
+  } catch (e) {
+    return '';
+  }
+}
+
 function addTruthSocialTokenCandidate(candidates, value) {
   const token = normalizeTruthSocialToken(value);
   if (token) {
@@ -70,6 +85,15 @@ function scanTruthSocialStorageArea(storage) {
     return candidates;
   }
 
+  try {
+    const explicit = extractTruthSocialAuthToken(storage.getItem('truth:auth'));
+    if (explicit) {
+      candidates.push(explicit);
+      return candidates;
+    }
+  } catch (e) {
+  }
+
   const seen = new Set();
   for (let i = 0; i < storage.length; i += 1) {
     const key = storage.key(i) || '';
@@ -78,11 +102,18 @@ function scanTruthSocialStorageArea(storage) {
       continue;
     }
 
-    if (/(token|auth|bearer|access|session)/i.test(key)) {
+    if (/^truth:auth$/i.test(key)) {
+      const explicit = extractTruthSocialAuthToken(value);
+      if (explicit) {
+        candidates.push(explicit);
+      }
+      continue;
+    }
+
+    if (/(access[_-]?token|bearer|auth)/i.test(key)) {
       addTruthSocialTokenCandidate(candidates, value);
     }
 
-    addTruthSocialTokenCandidate(candidates, value);
     try {
       scanTruthSocialObject(JSON.parse(value), candidates, seen, 0);
     } catch (e) {
@@ -131,7 +162,7 @@ function scanTruthSocialDocumentCookies() {
       }
       const key = part.slice(0, index);
       const value = part.slice(index + 1);
-      if (/(token|auth|bearer|access|session)/i.test(key)) {
+      if (/(access[_-]?token|auth|bearer)/i.test(key)) {
         addTruthSocialTokenCandidate(candidates, decodeURIComponent(value || ''));
       }
     }
