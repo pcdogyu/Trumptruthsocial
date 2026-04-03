@@ -160,6 +160,10 @@ func newLoginSession(username string) (*LoginSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	debugPort, err := freeTCPPort()
+	if err != nil {
+		return nil, err
+	}
 	profileDir, err := os.MkdirTemp("", "truthsocial-login-session-*")
 	if err != nil {
 		return nil, err
@@ -211,7 +215,7 @@ func newLoginSession(username string) (*LoginSession, error) {
 		ExtensionDir: extensionDir,
 		Display:      display,
 		VNCPort:      vncPort,
-		DebugPort:    0,
+		DebugPort:    debugPort,
 		Chromium:     chromiumPath,
 		LoginURL:     loginSessionLoginURL,
 		StartedAt:    time.Now().UTC(),
@@ -322,6 +326,8 @@ func (s *LoginSession) startChromium() error {
 		"--disable-extensions-except="+s.ExtensionDir,
 		"--load-extension="+s.ExtensionDir,
 		"--user-data-dir="+s.ProfileDir,
+		"--remote-debugging-address="+loginSessionBrowserAddress,
+		"--remote-debugging-port="+strconv.Itoa(s.DebugPort),
 		"--no-sandbox",
 		s.LoginURL,
 	)
@@ -516,6 +522,12 @@ func (s *LoginSession) Snapshot() map[string]any {
 }
 
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
+	if s.DebugPort > 0 {
+		token, cookies, err := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
+		if err == nil && (strings.TrimSpace(token) != "" || len(cookies) > 0) {
+			return token, cookies, nil
+		}
+	}
 	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 }
 
@@ -764,6 +776,68 @@ func readTokenAndCookiesFromProfileDir(userDataDir, loginURL string) (string, []
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("profile token capture failed for %s: %w", account, err)
+	}
+
+	return strings.TrimSpace(token), cookies, nil
+}
+
+func readTokenAndCookiesFromDebugPort(debugPort int, loginURL string) (string, []CapturedCookie, error) {
+	account := extractUsernameFromEntry(loginURL)
+	if debugPort <= 0 {
+		return "", nil, fmt.Errorf("remote debug port is unavailable")
+	}
+
+	allocatorURL := fmt.Sprintf("http://%s:%d", loginSessionBrowserAddress, debugPort)
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), allocatorURL)
+	defer allocCancel()
+
+	ctx, ctxCancel := chromedp.NewContext(allocCtx)
+	defer ctxCancel()
+
+	ctx, timeoutCancel := context.WithTimeout(ctx, 45*time.Second)
+	defer timeoutCancel()
+
+	var token string
+	var cookies []CapturedCookie
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(loginURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if err := chromedp.Evaluate(`(function() {
+				`+browserTokenDiscoveryJS()+`
+				return readTruthSocialBearerToken();
+			})()`, &token).Do(ctx); err != nil {
+				return err
+			}
+
+			cookieRows, err := network.GetCookies().WithUrls([]string{loginURL, "https://truthsocial.com/"}).Do(ctx)
+			if err != nil {
+				return err
+			}
+
+			captured := make([]CapturedCookie, 0, len(cookieRows))
+			for _, c := range cookieRows {
+				if c == nil {
+					continue
+				}
+				captured = append(captured, CapturedCookie{
+					Name:     c.Name,
+					Value:    c.Value,
+					Domain:   c.Domain,
+					Path:     c.Path,
+					Expires:  c.Expires,
+					HTTPOnly: c.HTTPOnly,
+					Secure:   c.Secure,
+					SameSite: string(c.SameSite),
+					Priority: string(c.Priority),
+				})
+			}
+			cookies = captured
+			return nil
+		}),
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("remote debug token capture failed for %s: %w", account, err)
 	}
 
 	return strings.TrimSpace(token), cookies, nil
