@@ -631,6 +631,10 @@ func shouldUseDBusRunSession(browserPath string) bool {
 	if strings.TrimSpace(browserPath) == "" {
 		return false
 	}
+	normalized := filepath.Clean(strings.ToLower(browserPath))
+	if strings.Contains(normalized, "/snap/bin/") || strings.HasPrefix(normalized, `\snap\bin\`) {
+		return false
+	}
 	if !strings.Contains(strings.ToLower(browserPath), "chromium") {
 		return false
 	}
