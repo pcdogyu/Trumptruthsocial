@@ -313,9 +313,14 @@ func (s *LoginSession) startChromium() error {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-gpu",
+		"--disable-gpu-compositing",
 		"--disable-dev-shm-usage",
 		"--disable-blink-features=AutomationControlled",
+		"--disable-features=VizDisplayCompositor,UseSkiaRenderer,UseOzonePlatform",
 		"--exclude-switches=enable-automation",
+		"--ozone-platform=x11",
+		"--use-gl=swiftshader",
+		"--use-angle=swiftshader",
 		"--window-size="+strconv.Itoa(loginSessionWidth)+","+strconv.Itoa(loginSessionHeight),
 		"--user-data-dir="+s.ProfileDir,
 		"--remote-debugging-address="+loginSessionBrowserAddress,
@@ -516,9 +521,10 @@ func (s *LoginSession) Snapshot() map[string]any {
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
 	if s.DebugPort > 0 {
 		token, cookies, err := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
-		if err == nil && (strings.TrimSpace(token) != "" || len(cookies) > 0) {
+		if err == nil {
 			return token, cookies, nil
 		}
+		return "", nil, err
 	}
 	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 }
