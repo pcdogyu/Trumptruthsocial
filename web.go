@@ -17,10 +17,10 @@ import (
 const contentPageSize = 10
 
 type App struct {
-	store          *PostStore
-	templates      map[string]*template.Template
-	gitInfo        GitInfo
-	loginSessions  *LoginSessionManager
+	store         *PostStore
+	templates     map[string]*template.Template
+	gitInfo       GitInfo
+	loginSessions *LoginSessionManager
 }
 
 func newApp(store *PostStore) (*App, error) {
@@ -277,6 +277,7 @@ func (a *App) handleTruthSocialLoginSessionCapture(w http.ResponseWriter, r *htt
 		BearerToken string           `json:"bearer_token"`
 		Cookies     []CapturedCookie `json:"cookies"`
 		PageURL     string           `json:"page_url"`
+		Source      string           `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "message": "捕获数据解析失败。"})
@@ -300,7 +301,11 @@ func (a *App) handleTruthSocialLoginSessionCapture(w http.ResponseWriter, r *htt
 	}
 
 	session.setSuccess(token, payload.Cookies)
-	log.Printf("truthsocial login capture received: session=%s cookies=%d", sessionID, len(payload.Cookies))
+	source := strings.TrimSpace(payload.Source)
+	if source == "" {
+		source = "unknown"
+	}
+	log.Printf("truthsocial login capture received: session=%s source=%s cookies=%d", sessionID, source, len(payload.Cookies))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Bearer Token 已写回后端。"})
 }
 

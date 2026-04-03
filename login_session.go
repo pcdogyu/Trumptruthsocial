@@ -10,9 +10,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -488,7 +488,7 @@ func (s *LoginSession) ensureCaptureExtension() error {
   "manifest_version": 3,
   "name": "Truth Social Login Capture",
   "version": "1.0.0",
-  "permissions": ["cookies", "storage"],
+  "permissions": ["cookies", "storage", "webRequest"],
   "host_permissions": ["https://truthsocial.com/*", "http://127.0.0.1:8085/*"],
   "background": {"service_worker": "background.js"},
   "content_scripts": [{
@@ -497,7 +497,10 @@ func (s *LoginSession) ensureCaptureExtension() error {
     "run_at": "document_idle"
   }]
 }`
-	background := fmt.Sprintf(`importScripts('config.js');
+	background := `importScripts('config.js');
+
+let capturedToken = '';
+let captureInFlight = false;
 
 async function getCookies() {
   return await new Promise((resolve) => {
@@ -518,18 +521,24 @@ async function getCookies() {
   });
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.type !== 'truthsocial-capture' || !msg.token) {
-    return;
+async function sendCapture(token, source, pageUrl) {
+  const normalized = (token || '').trim();
+  if (!normalized) {
+    return { ok: false, error: 'empty token' };
+  }
+  if (normalized === capturedToken || captureInFlight) {
+    return { ok: true, skipped: true };
   }
 
-  (async () => {
+  captureInFlight = true;
+  try {
     const payload = {
       session_id: TRUTHSOCIAL_LOGIN_SESSION_ID,
       username: TRUTHSOCIAL_LOGIN_USERNAME,
-      bearer_token: msg.token,
+      bearer_token: normalized,
       cookies: await getCookies(),
-      page_url: msg.pageUrl || '',
+      page_url: pageUrl || '',
+      source: source || 'page',
       captured_at: new Date().toISOString()
     };
     const resp = await fetch(TRUTHSOCIAL_LOGIN_CAPTURE_URL, {
@@ -538,13 +547,59 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       body: JSON.stringify(payload)
     });
     const text = await resp.text();
-    sendResponse({ ok: resp.ok, status: resp.status, body: text });
+    if (resp.ok) {
+      capturedToken = normalized;
+    }
+    return { ok: resp.ok, status: resp.status, body: text };
+  } finally {
+    captureInFlight = false;
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'truthsocial-capture' || !msg.token) {
+    return;
+  }
+
+  (async () => {
+    const resp = await sendCapture(msg.token, 'content-script', msg.pageUrl || '');
+    sendResponse(resp);
   })().catch((err) => {
     sendResponse({ ok: false, error: String(err) });
   });
   return true;
 });
-`, s.ID)
+
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    try {
+      const headers = details && Array.isArray(details.requestHeaders) ? details.requestHeaders : [];
+      for (const header of headers) {
+        const name = String(header && header.name ? header.name : '').toLowerCase();
+        if (name !== 'authorization') {
+          continue;
+        }
+        const value = String(header && header.value ? header.value : '').trim();
+        if (!/^bearer\s+/i.test(value)) {
+          continue;
+        }
+        const token = value.replace(/^bearer\s+/i, '').trim();
+        if (!token) {
+          continue;
+        }
+        sendCapture(token, 'web-request', details && details.url ? details.url : '').catch((err) => {
+          console.warn('truthsocial login webRequest capture failed', err);
+        });
+        break;
+      }
+    } catch (err) {
+      console.warn('truthsocial login webRequest handler failed', err);
+    }
+  },
+  { urls: ['https://truthsocial.com/*'] },
+  ['requestHeaders', 'extraHeaders']
+);
+`
 	content := fmt.Sprintf(`(() => {
 %s
   const sentKey = 'truthsocial_capture_sent_%s';
@@ -613,7 +668,7 @@ func persistLoginSessionData(sessionID, username, token string, cookies []Captur
 		"username":     username,
 		"bearer_token": token,
 		"cookies":      cookies,
-		"captured_at":   time.Now().UTC().Format(time.RFC3339Nano),
+		"captured_at":  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
