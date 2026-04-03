@@ -1202,9 +1202,9 @@ func findChromeExecPath() (string, error) {
 		"/usr/bin/vivaldi",
 		"/usr/bin/microsoft-edge",
 		"/usr/bin/msedge",
+		"/snap/bin/chromium",
 		"/snap/chromium/current/usr/lib/chromium-browser/chrome",
 		"/snap/chromium/current/usr/lib/chromium/chromium",
-		"/snap/bin/chromium",
 		"/opt/google/chrome/google-chrome",
 		"/opt/google/chrome/chrome",
 		"/usr/local/bin/google-chrome",
@@ -1235,19 +1235,16 @@ func resolveChromeCandidate(candidate string) (string, error) {
 			if info.IsDir() {
 				return "", fmt.Errorf("browser path is a directory: %s", candidate)
 			}
-			if strings.EqualFold(filepath.Clean(candidate), filepath.Clean("/snap/bin/chromium")) {
-				return "", fmt.Errorf("skip snap launcher wrapper: %s", candidate)
-			}
 			return candidate, nil
 		}
 		return "", fmt.Errorf("browser path not found: %s", candidate)
 	}
 	if resolved, err := exec.LookPath(candidate); err == nil {
 		if strings.EqualFold(filepath.Clean(resolved), filepath.Clean("/usr/bin/snap")) {
-			return "", fmt.Errorf("skip snap launcher wrapper: %s", candidate)
-		}
-		if strings.EqualFold(filepath.Clean(resolved), filepath.Clean("/snap/bin/chromium")) {
-			return "", fmt.Errorf("skip snap launcher wrapper: %s", candidate)
+			if info, statErr := os.Stat("/snap/bin/chromium"); statErr == nil && !info.IsDir() {
+				return "/snap/bin/chromium", nil
+			}
+			return "", fmt.Errorf("snap launcher resolved but chromium wrapper missing for: %s", candidate)
 		}
 		return resolved, nil
 	}
