@@ -79,6 +79,9 @@
     const detailText = document.getElementById('detailText');
     let statusTimer = null;
     let openerRefreshed = false;
+    let reconnectTimer = null;
+    let rfb = null;
+    let destroyed = false;
 
     function setStatus(message, kind) {
         statusText.textContent = message;
@@ -149,14 +152,47 @@
         }
     }
 
-    try {
+    function clearReconnectTimer() {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    }
+
+    function scheduleReconnect() {
+        if (destroyed || reconnectTimer) {
+            return;
+        }
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connectViewer();
+        }, 1500);
+    }
+
+    function connectViewer() {
+        clearReconnectTimer();
+        if (destroyed) {
+            return;
+        }
+        if (rfb) {
+            try {
+                rfb.disconnect();
+            } catch (err) {
+                console.warn('disconnect before reconnect failed', err);
+            }
+            rfb = null;
+        }
+
         setStatus('正在连接远程桌面...', 'info');
-        const rfb = new RFB(screen, wsUrl, { shared: true });
+        rfb = new RFB(screen, wsUrl, { shared: true });
         rfb.viewOnly = false;
         rfb.scaleViewport = true;
         rfb.resizeSession = true;
         rfb.addEventListener('connect', () => setStatus('远程桌面已连接，请在窗口中登录 Truth Social。', 'success'));
-        rfb.addEventListener('disconnect', () => setStatus('远程桌面连接已断开，正在等待重连或会话结束。', 'warning'));
+        rfb.addEventListener('disconnect', () => {
+            setStatus('远程桌面连接已断开，正在尝试重连...', 'warning');
+            scheduleReconnect();
+        });
         rfb.addEventListener('desktopname', (e) => {
             const name = e.detail && e.detail.name ? e.detail.name : '';
             if (name) {
@@ -165,16 +201,23 @@
         });
         rfb.addEventListener('credentialsrequired', () => setStatus('远程桌面不需要 VNC 密码，等待浏览器登录页加载。', 'info'));
 
+    }
+
+    try {
         pollStatus();
         statusTimer = setInterval(pollStatus, 2000);
-
+        connectViewer();
         window.addEventListener('beforeunload', function() {
+            destroyed = true;
+            clearReconnectTimer();
             if (statusTimer) {
                 clearInterval(statusTimer);
                 statusTimer = null;
             }
             try {
-                rfb.disconnect();
+                if (rfb) {
+                    rfb.disconnect();
+                }
             } catch (err) {
                 console.warn('disconnect failed', err);
             }

@@ -32,6 +32,7 @@ const (
 	loginSessionHeight         = 900
 	loginSessionPollInterval   = 2 * time.Second
 	loginSessionProfilePoll    = 5 * time.Second
+	loginSessionDebugWarmup    = 12 * time.Second
 	loginSessionTimeout        = 15 * time.Minute
 	loginSessionCleanupDelay   = 2 * time.Minute
 	loginSessionDisplayStart   = 80
@@ -519,12 +520,15 @@ func (s *LoginSession) Snapshot() map[string]any {
 }
 
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
-	if s.DebugPort > 0 {
+	if s.DebugPort > 0 && time.Since(s.StartedAt) >= loginSessionDebugWarmup {
 		token, cookies, err := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
 		if err == nil {
 			return token, cookies, nil
 		}
 		return "", nil, err
+	}
+	if s.DebugPort > 0 {
+		return "", nil, fmt.Errorf("remote debug port warming up")
 	}
 	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
 }
