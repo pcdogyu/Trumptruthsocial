@@ -592,17 +592,39 @@ func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, erro
 	if !s.CaptureToken {
 		return "", nil, fmt.Errorf("token capture disabled for desktop session")
 	}
-	if s.DebugPort > 0 && time.Since(s.StartedAt) >= loginSessionDebugWarmup {
-		token, cookies, err := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
-		if err == nil {
-			return token, cookies, nil
+
+	profileToken, profileCookies, profileErr := readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
+	profileToken = strings.TrimSpace(profileToken)
+	if profileErr == nil && profileToken != "" {
+		return profileToken, profileCookies, nil
+	}
+
+	if s.DebugPort <= 0 {
+		if profileErr != nil {
+			return "", nil, profileErr
 		}
-		return "", nil, err
+		return "", profileCookies, fmt.Errorf("token not found in browser profile yet")
 	}
-	if s.DebugPort > 0 {
-		return "", nil, fmt.Errorf("remote debug port warming up")
+	if time.Since(s.StartedAt) < loginSessionDebugWarmup {
+		if profileErr != nil {
+			return "", nil, profileErr
+		}
+		return "", profileCookies, fmt.Errorf("token not found in browser profile yet")
 	}
-	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
+
+	debugToken, debugCookies, debugErr := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
+	debugToken = strings.TrimSpace(debugToken)
+	if debugErr == nil && debugToken != "" {
+		return debugToken, debugCookies, nil
+	}
+
+	if profileErr == nil {
+		return "", profileCookies, fmt.Errorf("token not found in browser profile yet")
+	}
+	if debugErr != nil {
+		return "", nil, fmt.Errorf("%v; remote debug fallback pending: %w", profileErr, debugErr)
+	}
+	return "", nil, profileErr
 }
 
 func shouldUseDBusRunSession(browserPath string) bool {
