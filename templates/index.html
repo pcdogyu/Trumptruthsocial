@@ -99,7 +99,12 @@
     <form method="POST" action="/save_config">
         <div class="form-group">
             <label for="bearer_token">Bearer Token:</label>
-            <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{.BearerTokenValue}}">
+            <div class="input-group">
+                <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{.BearerTokenValue}}">
+                <div class="input-group-append">
+                    <button type="button" class="btn btn-outline-primary truthsocial-remote-login-button">远程登录</button>
+                </div>
+            </div>
             <small class="form-text text-muted">运行 `go run . get-token` 后，登录成功会自动写回 `config.yaml`。系统会保留最近 3 个 Token。</small>
         </div>
         <div class="form-group">
@@ -112,7 +117,7 @@
             <div class="input-group">
                 <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{.Config.Auth.TruthSocialUsername}}">
                 <div class="input-group-append">
-                    <button type="button" class="btn btn-outline-primary" id="truthsocialLoginButton">登录</button>
+                    <button type="button" class="btn btn-outline-primary truthsocial-remote-login-button" id="truthsocialLoginButton">登录</button>
                 </div>
             </div>
             <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。点击右侧“登录”按钮可打开浏览器登录并抓取 Bearer Token。</small>
@@ -255,7 +260,7 @@
             });
         }
 
-        $('#truthsocialLoginButton').on('click', function() {
+        $('.truthsocial-remote-login-button').on('click', function() {
             var $button = $(this);
             var originalText = $button.text();
             $button.prop('disabled', true).text('打开中...');
