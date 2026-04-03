@@ -102,7 +102,7 @@
             <div class="input-group">
                 <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{.BearerTokenValue}}">
                 <div class="input-group-append">
-                    <button type="button" class="btn btn-outline-primary truthsocial-remote-login-button">远程登录</button>
+                    <button type="button" class="btn btn-outline-secondary" id="remoteDesktopButton">远程登录</button>
                 </div>
             </div>
             <small class="form-text text-muted">运行 `go run . get-token` 后，登录成功会自动写回 `config.yaml`。系统会保留最近 3 个 Token。</small>
@@ -117,7 +117,7 @@
             <div class="input-group">
                 <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{.Config.Auth.TruthSocialUsername}}">
                 <div class="input-group-append">
-                    <button type="button" class="btn btn-outline-primary truthsocial-remote-login-button" id="truthsocialLoginButton">登录</button>
+                    <button type="button" class="btn btn-outline-primary" id="truthsocialLoginButton">登录</button>
                 </div>
             </div>
             <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。点击右侧“登录”按钮可打开浏览器登录并抓取 Bearer Token。</small>
@@ -260,11 +260,16 @@
             });
         }
 
-        $('.truthsocial-remote-login-button').on('click', function() {
+        function openRemoteSession(options) {
+            options = options || {};
+            var endpoint = options.endpoint || '/truthsocial/login';
+            var statusOpeningText = options.openingText || '正在启动远程登录窗口，请稍候。';
+            var statusSuccessText = options.successText || '远程登录窗口已打开。';
+            var requestData = options.data || {};
             var $button = $(this);
             var originalText = $button.text();
             $button.prop('disabled', true).text('打开中...');
-            setLoginStatus('正在启动远程登录窗口，请稍候。', 'info');
+            setLoginStatus(statusOpeningText, 'info');
             var loginPopup = window.open('', '_blank', 'width=1440,height=980');
             if (loginPopup) {
                 try {
@@ -282,12 +287,9 @@
             }, 5 * 60 * 1000);
 
             $.ajax({
-                url: '/truthsocial/login',
+                url: endpoint,
                 type: 'POST',
-                data: {
-                    source: 'web-ui',
-                    truthsocial_username: $('#truthsocial_username').val()
-                },
+                data: requestData,
                 dataType: 'json',
                 success: function(response) {
                     if (loginRequestTimeout) {
@@ -296,7 +298,7 @@
                     }
 
                     if (response.status === 'success') {
-                        setLoginStatus(response.message || '远程登录窗口已打开。', 'success');
+                        setLoginStatus(response.message || statusSuccessText, 'success');
                         if (response.viewer_url) {
                             if (loginPopup && !loginPopup.closed) {
                                 loginPopup.location = response.viewer_url;
@@ -330,6 +332,29 @@
                 },
                 complete: function() {
                     $button.prop('disabled', false).text(originalText);
+                }
+            });
+        }
+
+        $('#truthsocialLoginButton').on('click', function() {
+            openRemoteSession.call(this, {
+                endpoint: '/truthsocial/login',
+                openingText: '正在启动 Truth Social 登录窗口，请稍候。',
+                successText: 'Truth Social 登录窗口已打开。',
+                data: {
+                    source: 'web-ui',
+                    truthsocial_username: $('#truthsocial_username').val()
+                }
+            });
+        });
+
+        $('#remoteDesktopButton').on('click', function() {
+            openRemoteSession.call(this, {
+                endpoint: '/desktop/start',
+                openingText: '正在启动服务器远程桌面，请稍候。',
+                successText: '服务器远程桌面已打开。',
+                data: {
+                    source: 'web-ui'
                 }
             });
         });

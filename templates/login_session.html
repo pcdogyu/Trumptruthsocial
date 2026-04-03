@@ -46,12 +46,12 @@
 <div class="topbar">
     <div class="d-flex flex-wrap justify-content-between align-items-center">
         <div>
-            <div class="h5 mb-1">Truth Social 远程登录窗口</div>
+            <div class="h5 mb-1">{{if eq .SessionKind "desktop"}}服务器远程桌面{{else}}Truth Social 远程登录窗口{{end}}</div>
             <div class="status-line" id="statusText">正在初始化会话...</div>
         </div>
         <div class="text-right">
             <div class="badge badge-soft px-3 py-2 mb-1">Session: {{.SessionID}}</div>
-            <div class="small text-muted">用户名：@{{.Username}}</div>
+            <div class="small text-muted">{{if .Username}}用户名：@{{.Username}}{{else}}服务器浏览器桌面{{end}}</div>
         </div>
     </div>
 </div>
@@ -188,7 +188,7 @@
         rfb.viewOnly = false;
         rfb.scaleViewport = true;
         rfb.resizeSession = true;
-        rfb.addEventListener('connect', () => setStatus('远程桌面已连接，请在窗口中登录 Truth Social。', 'success'));
+        rfb.addEventListener('connect', () => setStatus('{{if eq .SessionKind "desktop"}}远程桌面已连接，请直接在服务器桌面的浏览器中操作。{{else}}远程桌面已连接，请在窗口中登录 Truth Social。{{end}}', 'success'));
         rfb.addEventListener('disconnect', () => {
             setStatus('远程桌面连接已断开，正在尝试重连...', 'warning');
             scheduleReconnect();

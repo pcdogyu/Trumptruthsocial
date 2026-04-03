@@ -73,6 +73,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/message_push/save", a.handleMessagePushSave)
 	mux.HandleFunc("/message_push/test", a.handleMessagePushTest)
 	mux.HandleFunc("/truthsocial/login", a.handleTruthSocialLogin)
+	mux.HandleFunc("/desktop/start", a.handleDesktopStart)
 	mux.HandleFunc("/truthsocial/login/session/", a.handleTruthSocialLoginSession)
 	mux.HandleFunc("/config_page", a.handleConfigPage)
 	return mux
@@ -181,6 +182,30 @@ func (a *App) handleTruthSocialLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleDesktopStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	log.Printf("desktop session requested via web ui")
+	session, err := a.loginSessions.StartDesktop()
+	if err != nil {
+		log.Printf("desktop session start failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+
+	log.Printf("desktop session started: id=%s display=%d vnc_port=%d debug_port=%d", session.ID, session.Display, session.VNCPort, session.DebugPort)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "success",
+		"message":    "服务器远程桌面已打开，请在新窗口中操作浏览器。",
+		"session_id": session.ID,
+		"viewer_url": a.loginSessionViewerURL(r, session.ID),
+		"status_url": a.loginSessionStatusURL(r, session.ID),
+	})
+}
+
 func (a *App) handleTruthSocialLoginSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodConnect {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -223,13 +248,18 @@ func (a *App) handleTruthSocialLoginSession(w http.ResponseWriter, r *http.Reque
 
 	snapshot := session.Snapshot()
 	message, _ := snapshot["message"].(string)
+	title := "Truth Social 登录会话"
+	if session.SessionKind == "desktop" {
+		title = "服务器远程桌面"
+	}
 	data := LoginSessionPageData{
-		Title:      "Truth Social 登录会话",
-		ActivePage: "config",
-		Git:        a.gitInfo,
-		SessionID:  session.ID,
-		Username:   session.Username,
-		Message:    message,
+		Title:       title,
+		ActivePage:  "config",
+		Git:         a.gitInfo,
+		SessionID:   session.ID,
+		Username:    session.Username,
+		Message:     message,
+		SessionKind: session.SessionKind,
 	}
 	a.render(w, "login_session.html", data)
 }

@@ -445,6 +445,14 @@ func bearerTokenNeedsRefresh(cfg Config, now time.Time) bool {
 	return !now.Before(expiry)
 }
 
+func hasConfiguredBearerToken(cfg Config) bool {
+	token := strings.TrimSpace(cfg.Auth.BearerToken)
+	if token == "" {
+		return false
+	}
+	return !strings.Contains(token, "YOUR_TRUTHSOCIAL_BEARER_TOKEN")
+}
+
 func rotateBearerTokens(cfg *Config, newToken string) {
 	newToken = strings.TrimSpace(newToken)
 	if newToken == "" {

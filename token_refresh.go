@@ -12,6 +12,11 @@ func ensureBearerTokenOnStartup() {
 		return
 	}
 
+	if !hasConfiguredBearerToken(cfg) {
+		log.Printf("Bearer Token 为空或仍是占位值，启动时跳过自动抓取和 Truth Social 访问。")
+		return
+	}
+
 	if !bearerTokenNeedsRefresh(cfg, time.Now().UTC()) {
 		return
 	}

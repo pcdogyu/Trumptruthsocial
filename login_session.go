@@ -28,6 +28,7 @@ import (
 
 const (
 	loginSessionLoginURL       = "https://truthsocial.com/login"
+	loginSessionDesktopURL     = "https://truthsocial.com/login"
 	loginSessionWidth          = 1280
 	loginSessionHeight         = 900
 	loginSessionPollInterval   = 2 * time.Second
@@ -67,6 +68,8 @@ const (
 type LoginSession struct {
 	ID           string
 	Username     string
+	SessionKind  string
+	CaptureToken bool
 	ProfileDir   string
 	ExtensionDir string
 	Display      int
@@ -127,6 +130,46 @@ func (m *LoginSessionManager) Start(username string) (*LoginSession, error) {
 	defer m.mu.Unlock()
 
 	sess, err := newLoginSession(username)
+	if err != nil {
+		return nil, err
+	}
+	sess.manager = m
+	m.sessions[sess.ID] = sess
+	if err := sess.start(); err != nil {
+		delete(m.sessions, sess.ID)
+		return nil, err
+	}
+	go sess.monitor()
+	return sess, nil
+}
+
+func (m *LoginSessionManager) StartDesktop() (*LoginSession, error) {
+	m.mu.Lock()
+	var staleSessions []*LoginSession
+	for id, s := range m.sessions {
+		if s == nil {
+			delete(m.sessions, id)
+			continue
+		}
+		switch s.State() {
+		case LoginSessionStarting, LoginSessionRunning:
+			log.Printf("replacing active desktop/login session: id=%s state=%s", s.ID, s.State())
+			staleSessions = append(staleSessions, s)
+			delete(m.sessions, id)
+		case LoginSessionClosed, LoginSessionError, LoginSessionSuccess:
+			delete(m.sessions, id)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, stale := range staleSessions {
+		go stale.cleanup()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, err := newDesktopSession()
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +256,8 @@ func newLoginSession(username string) (*LoginSession, error) {
 	return &LoginSession{
 		ID:           randID("login"),
 		Username:     username,
+		SessionKind:  "login",
+		CaptureToken: true,
 		ProfileDir:   profileDir,
 		ExtensionDir: extensionDir,
 		Display:      display,
@@ -225,6 +270,19 @@ func newLoginSession(username string) (*LoginSession, error) {
 		message:      "正在启动远程登录窗口...",
 		done:         make(chan struct{}),
 	}, nil
+}
+
+func newDesktopSession() (*LoginSession, error) {
+	sess, err := newLoginSession("")
+	if err != nil {
+		return nil, err
+	}
+	sess.ID = randID("desktop")
+	sess.SessionKind = "desktop"
+	sess.CaptureToken = false
+	sess.LoginURL = loginSessionDesktopURL
+	sess.message = "正在启动服务器远程桌面..."
+	return sess, nil
 }
 
 func (s *LoginSession) start() error {
@@ -254,7 +312,11 @@ func (s *LoginSession) start() error {
 		return err
 	}
 
-	s.setRunning("远程登录窗口已打开，请在弹出的窗口中完成 Truth Social 登录。")
+	if s.CaptureToken {
+		s.setRunning("远程登录窗口已打开，请在弹出的窗口中完成 Truth Social 登录。")
+	} else {
+		s.setRunning("服务器远程桌面已打开，请在远程桌面中的浏览器里手动登录。")
+	}
 	return nil
 }
 
@@ -308,9 +370,9 @@ func (s *LoginSession) startChromium() error {
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return err
 	}
-	log.Printf("truthsocial login browser ready: session=%s profile_dir=%s debug_port=%d", s.ID, s.ProfileDir, s.DebugPort)
+	log.Printf("truthsocial %s browser ready: session=%s profile_dir=%s debug_port=%d", s.SessionKind, s.ID, s.ProfileDir, s.DebugPort)
 
-	cmd := exec.Command(s.Chromium,
+	args := []string{
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-gpu",
@@ -322,13 +384,20 @@ func (s *LoginSession) startChromium() error {
 		"--ozone-platform=x11",
 		"--use-gl=swiftshader",
 		"--use-angle=swiftshader",
-		"--window-size="+strconv.Itoa(loginSessionWidth)+","+strconv.Itoa(loginSessionHeight),
-		"--user-data-dir="+s.ProfileDir,
-		"--remote-debugging-address="+loginSessionBrowserAddress,
-		"--remote-debugging-port="+strconv.Itoa(s.DebugPort),
+		"--window-size=" + strconv.Itoa(loginSessionWidth) + "," + strconv.Itoa(loginSessionHeight),
+		"--user-data-dir=" + s.ProfileDir,
+		"--remote-debugging-address=" + loginSessionBrowserAddress,
+		"--remote-debugging-port=" + strconv.Itoa(s.DebugPort),
 		"--no-sandbox",
 		s.LoginURL,
-	)
+	}
+	var cmd *exec.Cmd
+	if shouldUseDBusRunSession(s.Chromium) {
+		args = append([]string{"--", s.Chromium}, args...)
+		cmd = exec.Command("dbus-run-session", args...)
+	} else {
+		cmd = exec.Command(s.Chromium, args...)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),
@@ -369,7 +438,7 @@ func (s *LoginSession) monitor() {
 			return
 		}
 
-		if time.Since(lastProfileCaptureAttempt) >= loginSessionProfilePoll {
+		if s.CaptureToken && time.Since(lastProfileCaptureAttempt) >= loginSessionProfilePoll {
 			lastProfileCaptureAttempt = time.Now()
 			captured, err := s.tryCaptureFromProfile()
 			if captured {
@@ -458,7 +527,11 @@ func (s *LoginSession) setSuccess(token string, cookies []CapturedCookie) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = LoginSessionSuccess
-	s.message = "登录完成，Bearer Token 已写回后端。"
+	if s.CaptureToken {
+		s.message = "登录完成，Bearer Token 已写回后端。"
+	} else {
+		s.message = "服务器远程桌面会话运行中。"
+	}
 	s.token = token
 	s.cookies = cookies
 }
@@ -520,6 +593,9 @@ func (s *LoginSession) Snapshot() map[string]any {
 }
 
 func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, error) {
+	if !s.CaptureToken {
+		return "", nil, fmt.Errorf("token capture disabled for desktop session")
+	}
 	if s.DebugPort > 0 && time.Since(s.StartedAt) >= loginSessionDebugWarmup {
 		token, cookies, err := readTokenAndCookiesFromDebugPort(s.DebugPort, s.LoginURL)
 		if err == nil {
@@ -531,6 +607,19 @@ func (s *LoginSession) attachAndReadCookieData() (string, []CapturedCookie, erro
 		return "", nil, fmt.Errorf("remote debug port warming up")
 	}
 	return readTokenAndCookiesFromProfileDir(s.ProfileDir, s.LoginURL)
+}
+
+func shouldUseDBusRunSession(browserPath string) bool {
+	if strings.TrimSpace(browserPath) == "" {
+		return false
+	}
+	if !strings.Contains(strings.ToLower(browserPath), "chromium") {
+		return false
+	}
+	if _, err := exec.LookPath("dbus-run-session"); err != nil {
+		return false
+	}
+	return true
 }
 
 func (s *LoginSession) ensureCaptureExtension() error {

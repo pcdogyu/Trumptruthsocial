@@ -123,12 +123,13 @@ type TranslationConfigPageData struct {
 }
 
 type LoginSessionPageData struct {
-	Title      string
-	ActivePage string
-	Git        GitInfo
-	SessionID  string
-	Username   string
-	Message    string
+	Title       string
+	ActivePage  string
+	Git         GitInfo
+	SessionID   string
+	Username    string
+	Message     string
+	SessionKind string
 }
 
 type SyncResponse struct {
