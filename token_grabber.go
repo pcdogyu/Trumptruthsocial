@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -176,6 +177,10 @@ func shouldUseHeadlessTokenBrowser(forceVisible bool) bool {
 		case "0", "false", "no", "off":
 			return false
 		}
+	}
+	// Windows 有原生显示，不需要 DISPLAY 环境变量，始终使用可见浏览器
+	if runtime.GOOS == "windows" {
+		return false
 	}
 	if strings.TrimSpace(os.Getenv("DISPLAY")) == "" && strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) == "" {
 		return true

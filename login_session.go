@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -304,7 +305,9 @@ func (s *LoginSession) start() error {
 		return err
 	}
 
-	time.Sleep(loginSessionChromiumDelay)
+	if runtime.GOOS != "windows" {
+		time.Sleep(loginSessionChromiumDelay)
+	}
 
 	if err := s.startX11VNC(); err != nil {
 		s.setError(fmt.Errorf("启动 VNC 服务失败: %w", err))
@@ -318,10 +321,18 @@ func (s *LoginSession) start() error {
 		return err
 	}
 
-	if s.CaptureToken {
-		s.setRunning("远程登录窗口已打开，请在弹出的窗口中完成 Truth Social 登录。")
+	if runtime.GOOS == "windows" {
+		if s.CaptureToken {
+			s.setRunning("浏览器已在本机打开，请在弹出的 Chrome 窗口中完成 Truth Social 登录。")
+		} else {
+			s.setRunning("浏览器已在本机打开，请在 Chrome 窗口中手动登录。")
+		}
 	} else {
-		s.setRunning("服务器远程桌面已打开，请在远程桌面中的浏览器里手动登录。")
+		if s.CaptureToken {
+			s.setRunning("远程登录窗口已打开，请在弹出的窗口中完成 Truth Social 登录。")
+		} else {
+			s.setRunning("服务器远程桌面已打开，请在远程桌面中的浏览器里手动登录。")
+		}
 	}
 	if s.CaptureToken && strings.TrimSpace(s.Username) != "" && strings.TrimSpace(s.Password) != "" {
 		go s.runCredentialLogin()
@@ -331,6 +342,10 @@ func (s *LoginSession) start() error {
 }
 
 func (s *LoginSession) startXvfb() error {
+	if runtime.GOOS == "windows" {
+		debugf("login session startXvfb skipped on Windows: id=%s", s.ID)
+		return nil
+	}
 	displayArg := ":" + strconv.Itoa(s.Display)
 	cmd := exec.Command("Xvfb", displayArg, "-screen", "0", fmt.Sprintf("%dx%dx24", loginSessionWidth, loginSessionHeight), "-ac", "-nolisten", "tcp")
 	debugf("login session starting Xvfb: id=%s cmd=%q args=%q", s.ID, cmd.Path, cmd.Args)
@@ -346,6 +361,10 @@ func (s *LoginSession) startXvfb() error {
 }
 
 func (s *LoginSession) startX11VNC() error {
+	if runtime.GOOS == "windows" {
+		debugf("login session startX11VNC skipped on Windows: id=%s", s.ID)
+		return nil
+	}
 	displayArg := ":" + strconv.Itoa(s.Display)
 	cmd := exec.Command("x11vnc",
 		"-display", displayArg,
@@ -387,35 +406,58 @@ func (s *LoginSession) startChromium() error {
 	log.Printf("truthsocial %s browser ready: session=%s profile_dir=%s debug_port=%d", s.SessionKind, s.ID, s.ProfileDir, s.DebugPort)
 	debugf("login session runtime prepared: id=%s runtime_dir=%s display=%s chromium=%s", s.ID, runtimeDir, displayArg, s.Chromium)
 
-	args := []string{
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--disable-dev-shm-usage",
-		"--disable-blink-features=AutomationControlled",
-		"--exclude-switches=enable-automation",
-		"--ozone-platform=x11",
-		"--use-gl=swiftshader",
-		"--in-process-gpu",
-		"--disable-gpu-watchdog",
-		"--ignore-gpu-blocklist",
-		"--disable-gpu-shader-disk-cache",
-		"--force-device-scale-factor=1",
-		// 减少后台活动和内存占用，防止服务器环境下崩溃
-		"--disable-extensions",
-		"--disable-background-networking",
-		"--disable-default-apps",
-		"--disable-sync",
-		"--disable-hang-monitor",
-		"--disable-crash-reporter",
-		"--mute-audio",
-		"--window-position=0,0",
-		"--window-size=" + strconv.Itoa(loginSessionWidth) + "," + strconv.Itoa(loginSessionHeight),
-		"--user-data-dir=" + s.ProfileDir,
-		"--remote-debugging-address=" + loginSessionBrowserAddress,
-		"--remote-debugging-port=" + strconv.Itoa(s.DebugPort),
-		"--no-sandbox",
-		"--new-window",
-		s.LoginURL,
+	var args []string
+	if runtime.GOOS == "windows" {
+		args = []string{
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-blink-features=AutomationControlled",
+			"--exclude-switches=enable-automation",
+			"--disable-background-networking",
+			"--disable-default-apps",
+			"--disable-sync",
+			"--disable-hang-monitor",
+			"--disable-crash-reporter",
+			"--mute-audio",
+			"--window-position=0,0",
+			"--window-size=" + strconv.Itoa(loginSessionWidth) + "," + strconv.Itoa(loginSessionHeight),
+			"--user-data-dir=" + s.ProfileDir,
+			"--remote-debugging-address=" + loginSessionBrowserAddress,
+			"--remote-debugging-port=" + strconv.Itoa(s.DebugPort),
+			"--new-window",
+			s.LoginURL,
+		}
+	} else {
+		args = []string{
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-dev-shm-usage",
+			"--disable-blink-features=AutomationControlled",
+			"--exclude-switches=enable-automation",
+			"--ozone-platform=x11",
+			"--use-gl=swiftshader",
+			"--in-process-gpu",
+			"--disable-gpu-watchdog",
+			"--ignore-gpu-blocklist",
+			"--disable-gpu-shader-disk-cache",
+			"--force-device-scale-factor=1",
+			// 减少后台活动和内存占用，防止服务器环境下崩溃
+			"--disable-extensions",
+			"--disable-background-networking",
+			"--disable-default-apps",
+			"--disable-sync",
+			"--disable-hang-monitor",
+			"--disable-crash-reporter",
+			"--mute-audio",
+			"--window-position=0,0",
+			"--window-size=" + strconv.Itoa(loginSessionWidth) + "," + strconv.Itoa(loginSessionHeight),
+			"--user-data-dir=" + s.ProfileDir,
+			"--remote-debugging-address=" + loginSessionBrowserAddress,
+			"--remote-debugging-port=" + strconv.Itoa(s.DebugPort),
+			"--no-sandbox",
+			"--new-window",
+			s.LoginURL,
+		}
 	}
 	var cmd *exec.Cmd
 	useDBusRunSession := shouldUseDBusRunSession(s.Chromium)
@@ -429,10 +471,14 @@ func (s *LoginSession) startChromium() error {
 	debugf("login session starting chromium: id=%s cmd=%q args=%q", s.ID, cmd.Path, cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
-		"DISPLAY="+displayArg,
-		"XDG_RUNTIME_DIR="+runtimeDir,
-	)
+	if runtime.GOOS == "windows" {
+		cmd.Env = os.Environ()
+	} else {
+		cmd.Env = append(os.Environ(),
+			"DISPLAY="+displayArg,
+			"XDG_RUNTIME_DIR="+runtimeDir,
+		)
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -1242,6 +1288,9 @@ func cookieNames(cookies []CapturedCookie) []string {
 }
 
 func chooseDisplayNumber() (int, error) {
+	if runtime.GOOS == "windows" {
+		return 0, nil
+	}
 	for display := loginSessionDisplayStart; display <= loginSessionDisplayEnd; display++ {
 		socket := filepath.Join("/tmp/.X11-unix", fmt.Sprintf("X%d", display))
 		if _, err := os.Stat(socket); err == nil {
@@ -1266,6 +1315,9 @@ func freeTCPPort() (int, error) {
 }
 
 func ensureX11VNCInstalled() error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	if _, err := exec.LookPath("x11vnc"); err == nil {
 		debugf("x11vnc already installed")
 		return nil
@@ -1300,6 +1352,10 @@ func randID(prefix string) string {
 }
 
 func (s *LoginSession) VNCWebSocketHandler(w http.ResponseWriter, r *http.Request) {
+	if runtime.GOOS == "windows" {
+		http.Error(w, "VNC 远程查看在 Windows 上不适用，请直接查看本机弹出的 Chrome 窗口", http.StatusNotImplemented)
+		return
+	}
 	debugf("login session websocket proxy start: session=%s vnc_port=%d remote=%s", s.ID, s.VNCPort, r.RemoteAddr)
 	conn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
