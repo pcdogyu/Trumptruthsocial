@@ -41,10 +41,6 @@ func syncAllAccounts(store *PostStore, days int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !hasConfiguredBearerToken(cfg) {
-		log.Printf("Bearer Token 为空或仍是占位值，跳过历史同步。")
-		return 0, nil
-	}
 
 	cutoff := time.Time{}
 	if days > 0 {
@@ -87,10 +83,6 @@ func syncLatestAccounts(store *PostStore) (int, error) {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return 0, err
-	}
-	if !hasConfiguredBearerToken(cfg) {
-		log.Printf("Bearer Token 为空或仍是占位值，跳过最新内容同步。")
-		return 0, nil
 	}
 	debugf("syncLatestAccounts start: accounts=%d", len(cfg.AccountsToMonitor))
 
@@ -147,11 +139,6 @@ func runMonitor(store *PostStore) {
 
 		if len(cfg.AccountsToMonitor) == 0 {
 			log.Println("监控列表为空。")
-		}
-		if !hasConfiguredBearerToken(cfg) {
-			log.Printf("Bearer Token 为空或仍是占位值，跳过本轮监控并休眠 %s", interval)
-			time.Sleep(interval)
-			continue
 		}
 		debugf("monitor cycle start: interval=%s accounts=%d", interval, len(cfg.AccountsToMonitor))
 
