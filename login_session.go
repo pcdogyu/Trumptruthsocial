@@ -395,6 +395,7 @@ func (s *LoginSession) startChromium() error {
 		"--exclude-switches=enable-automation",
 		"--ozone-platform=x11",
 		"--use-gl=swiftshader",
+		"--in-process-gpu",
 		"--disable-gpu-watchdog",
 		"--ignore-gpu-blocklist",
 		"--disable-gpu-shader-disk-cache",
