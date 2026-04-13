@@ -21,6 +21,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -514,6 +515,128 @@ func readAuthTokenFromBrowser(ctx context.Context) string {
 	return strings.TrimSpace(token)
 }
 
+// browserFetchJSON 在浏览器上下文内执行 fetch()，规避 Go http.Client 的 TLS 指纹差异导致 Cloudflare 403。
+func browserFetchJSON(ctx context.Context, fetchURL, bearerToken string, target any) error {
+	js := fmt.Sprintf(`(async () => {
+		const resp = await fetch(%q, {
+			credentials: 'include',
+			headers: {
+				'Authorization': %q,
+				'Accept': 'application/json, text/plain, */*',
+				'Accept-Language': 'en-US,en;q=0.9',
+			},
+		});
+		if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+		return await resp.json();
+	})()`, fetchURL, "Bearer "+strings.TrimSpace(bearerToken))
+
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		result, exp, err := runtime.Evaluate(js).
+			WithAwaitPromise(true).
+			WithReturnByValue(true).
+			Do(ctx)
+		if err != nil {
+			return err
+		}
+		if exp != nil {
+			return fmt.Errorf("browser fetch error: %s", exp.Text)
+		}
+		if result == nil || len(result.Value) == 0 {
+			return fmt.Errorf("browser fetch returned empty result")
+		}
+		return json.Unmarshal(result.Value, target)
+	}).Do(ctx)
+}
+
+// fetchPostsViaBrowserFetch 在已导航的浏览器上下文内通过 JS fetch 调用 TruthSocial API。
+func fetchPostsViaBrowserFetch(ctx context.Context, account, token string, limit int) ([]Post, error) {
+	lookupURL := "https://truthsocial.com/api/v1/accounts/lookup?acct=" + url.QueryEscape(account)
+	var lookupAccount mastodonLookupAccount
+	if err := browserFetchJSON(ctx, lookupURL, token, &lookupAccount); err != nil {
+		return nil, fmt.Errorf("browser fetch lookup failed: %w", err)
+	}
+	if lookupAccount.ID == "" {
+		return nil, fmt.Errorf("browser fetch lookup returned empty account id for %s", account)
+	}
+
+	statusesURL := "https://truthsocial.com/api/v1/accounts/" + url.QueryEscape(lookupAccount.ID) + "/statuses"
+	if limit > 0 {
+		statusesURL += "?limit=" + strconv.Itoa(limit)
+	}
+	var statuses []mastodonStatus
+	if err := browserFetchJSON(ctx, statusesURL, token, &statuses); err != nil {
+		return nil, fmt.Errorf("browser fetch statuses failed: %w", err)
+	}
+
+	posts := statusesToPosts(account, lookupAccount, statuses)
+	if limit > 0 && len(posts) > limit {
+		posts = posts[:limit]
+	}
+	return posts, nil
+}
+
+// fetchHistoricalPostsViaBrowserFetch 在已导航的浏览器上下文内通过 JS fetch 分页获取历史帖子。
+func fetchHistoricalPostsViaBrowserFetch(ctx context.Context, account, token string, cutoff time.Time) ([]Post, error) {
+	lookupURL := "https://truthsocial.com/api/v1/accounts/lookup?acct=" + url.QueryEscape(account)
+	var lookupAccount mastodonLookupAccount
+	if err := browserFetchJSON(ctx, lookupURL, token, &lookupAccount); err != nil {
+		return nil, fmt.Errorf("browser fetch lookup failed: %w", err)
+	}
+	if lookupAccount.ID == "" {
+		return nil, fmt.Errorf("browser fetch lookup returned empty account id for %s", account)
+	}
+
+	const pageLimit = 40
+	const maxPages = 20
+	collected := map[string]Post{}
+	maxID := ""
+	for page := 0; page < maxPages; page++ {
+		statusesURL := "https://truthsocial.com/api/v1/accounts/" + url.QueryEscape(lookupAccount.ID) + "/statuses?limit=" + strconv.Itoa(pageLimit)
+		if maxID != "" {
+			statusesURL += "&max_id=" + url.QueryEscape(maxID)
+		}
+		var statuses []mastodonStatus
+		if err := browserFetchJSON(ctx, statusesURL, token, &statuses); err != nil {
+			return nil, fmt.Errorf("browser fetch statuses page %d failed: %w", page+1, err)
+		}
+		if len(statuses) == 0 {
+			break
+		}
+		log.Printf("browser fetch historical page %d for %s: statuses=%d max_id=%s", page+1, account, len(statuses), maxID)
+
+		reachedCutoff := false
+		for _, status := range statuses {
+			post := statusToPost(account, lookupAccount, status)
+			if post.ID == "" {
+				continue
+			}
+			if !cutoff.IsZero() {
+				if t := parsePostTime(post.Timestamp); !t.IsZero() && t.Before(cutoff) {
+					reachedCutoff = true
+					break
+				}
+			}
+			collected[post.ID] = post
+		}
+		if reachedCutoff {
+			break
+		}
+
+		lastID := strings.TrimSpace(statuses[len(statuses)-1].ID)
+		if lastID == "" || lastID == maxID || len(statuses) < pageLimit {
+			break
+		}
+		maxID = lastID
+	}
+
+	posts := make([]Post, 0, len(collected))
+	for _, post := range collected {
+		posts = append(posts, post)
+	}
+	sortPostsByFreshness(posts)
+	return posts, nil
+}
+
 func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int, userDataDir string) ([]Post, error) {
 	account := extractUsernameFromEntry(profileURL)
 	var posts []Post
@@ -532,15 +655,7 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 			return err
 		}
 
-		// 导航后捕获浏览器的新鲜 Cookie（包含 Cloudflare 重新签发的 __cf_bm）
-		var freshCookies string
-		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			freshCookies = captureBrowserCookies(ctx)
-			return nil
-		})); err != nil {
-			debugf("fetchPostsViaBrowserAPIWithProfile cookie capture failed: %v", err)
-		}
-
+		// 从浏览器读取 Bearer Token（优先使用浏览器中的，其次用配置文件中的）
 		var authToken string
 		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			authToken = readAuthTokenFromBrowser(ctx)
@@ -554,14 +669,16 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 			return fmt.Errorf("no Truth Social access token available")
 		}
 
+		// 直接在浏览器内通过 JS fetch 调用 API，规避 Go http.Client TLS 指纹被 Cloudflare 识别
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchPostsViaHTTPWithCookies(account, token, limit, freshCookies)
+			p, err := fetchPostsViaBrowserFetch(ctx, account, token, limit)
 			if err == nil {
 				posts = p
 				return nil
 			}
 			lastErr = err
+			debugf("fetchPostsViaBrowserAPIWithProfile browser fetch failed: token=%s err=%v", maskToken(token), err)
 		}
 		return lastErr
 	})
@@ -588,14 +705,6 @@ func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config,
 			return err
 		}
 
-		var freshCookies string
-		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			freshCookies = captureBrowserCookies(ctx)
-			return nil
-		})); err != nil {
-			debugf("fetchHistoricalPostsViaBrowserAPIWithProfile cookie capture failed: %v", err)
-		}
-
 		var authToken string
 		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			authToken = readAuthTokenFromBrowser(ctx)
@@ -611,12 +720,13 @@ func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config,
 
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchHistoricalPostsViaHTTPWithCookies(account, token, cutoff, freshCookies)
+			p, err := fetchHistoricalPostsViaBrowserFetch(ctx, account, token, cutoff)
 			if err == nil {
 				posts = p
 				return nil
 			}
 			lastErr = err
+			debugf("fetchHistoricalPostsViaBrowserAPIWithProfile browser fetch failed: token=%s err=%v", maskToken(token), err)
 		}
 		return lastErr
 	})
