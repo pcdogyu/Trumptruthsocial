@@ -496,9 +496,9 @@ func (s *LoginSession) monitor() {
 
 func (s *LoginSession) runCredentialLogin() {
 	debugf("login session credential automation scheduled: session=%s username=%s", s.ID, s.Username)
-	// 等待 30 秒再启动，留时间让用户手动通过 Cloudflare 人机验证
+	// 等待 90 秒再启动，留时间让用户手动通过 Cloudflare 人机验证并填写账号密码
 	select {
-	case <-time.After(30 * time.Second):
+	case <-time.After(90 * time.Second):
 	case <-s.done:
 		debugf("login session credential automation stopped during warmup: session=%s", s.ID)
 		return
@@ -1129,6 +1129,11 @@ func submitTruthSocialCredentialsViaDebugPort(debugPort int, username, password 
   const passInput = document.querySelector('input[name=\"password\"], input[autocomplete=\"current-password\"], input[type=\"password\"]');
   if (!userInput || !passInput) {
     return { submitted: false, page_url: pageURL, reason: 'login form not found' };
+  }
+
+  // 如果用户已经开始手动输入，跳过自动填写
+  if ((userInput.value || '').trim() !== '' || (passInput.value || '').trim() !== '') {
+    return { submitted: false, page_url: pageURL, reason: 'user already typing' };
   }
 
   setValue(userInput, username);
