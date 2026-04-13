@@ -34,7 +34,7 @@ const (
 	loginSessionPollInterval   = 2 * time.Second
 	loginSessionProfilePoll    = 12 * time.Second
 	loginSessionDebugWarmup    = 60 * time.Second
-	loginSessionTimeout        = 15 * time.Minute
+	loginSessionTimeout        = 30 * time.Minute
 	loginSessionCleanupDelay   = 2 * time.Minute
 	loginSessionDisplayStart   = 80
 	loginSessionDisplayEnd     = 199
@@ -528,7 +528,7 @@ func (s *LoginSession) runCredentialLogin() {
 		debugf("login session credential automation stopped during warmup: session=%s", s.ID)
 		return
 	}
-	deadline := time.Now().Add(3 * time.Minute)
+	deadline := time.Now().Add(10 * time.Minute)
 	for time.Now().Before(deadline) {
 		select {
 		case <-s.done:
@@ -664,10 +664,11 @@ func (s *LoginSession) markClosed(message string) {
 	defer s.mu.Unlock()
 	if s.state != LoginSessionSuccess && s.state != LoginSessionError {
 		s.state = LoginSessionClosed
+		if message != "" {
+			s.message = message
+		}
 	}
-	if message != "" {
-		s.message = message
-	}
+	// 不覆盖 Error/Success 状态已经设置的具体消息（如"浏览器意外退出"）
 	debugf("login session marked closed: session=%s state=%s message=%s", s.ID, s.state, s.message)
 }
 
