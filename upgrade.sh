@@ -43,3 +43,4 @@ echo "[$(date -Iseconds)] restarting truthsocial.service"
 systemctl restart truthsocial.service
 
 echo "[$(date -Iseconds)] upgrade finished"
+systemctl status truthsocial -n 20 --no-pager
