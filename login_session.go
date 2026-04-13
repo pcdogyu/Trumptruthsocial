@@ -390,12 +390,12 @@ func (s *LoginSession) startChromium() error {
 	args := []string{
 		"--no-first-run",
 		"--no-default-browser-check",
-		"--disable-gpu",
 		"--disable-dev-shm-usage",
 		"--disable-blink-features=AutomationControlled",
 		"--disable-features=VizDisplayCompositor",
 		"--exclude-switches=enable-automation",
 		"--ozone-platform=x11",
+		"--use-gl=swiftshader",
 		"--force-device-scale-factor=1",
 		"--window-position=0,0",
 		"--window-size=" + strconv.Itoa(loginSessionWidth) + "," + strconv.Itoa(loginSessionHeight),
