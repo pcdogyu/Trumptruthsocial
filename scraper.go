@@ -653,6 +653,26 @@ func fetchHistoricalPostsViaHTTP(account, token string, cutoff time.Time) ([]Pos
 	return posts, nil
 }
 
+func loadSessionCookieHeader() string {
+	data, err := os.ReadFile("truthsocial_login_session.json")
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		Cookies []CapturedCookie `json:"cookies"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	var parts []string
+	for _, c := range payload.Cookies {
+		if strings.TrimSpace(c.Name) != "" && strings.TrimSpace(c.Value) != "" {
+			parts = append(parts, c.Name+"="+c.Value)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 func doTruthSocialJSONRequest(method, rawURL, token string, body io.Reader, target any) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(method, rawURL, body)
@@ -669,6 +689,9 @@ func doTruthSocialJSONRequest(method, rawURL, token string, body io.Reader, targ
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	if cookieHeader := loadSessionCookieHeader(); cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
 	}
 
 	resp, err := client.Do(req)
