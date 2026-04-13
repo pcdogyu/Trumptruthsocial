@@ -427,8 +427,30 @@ func (s *LoginSession) startChromium() error {
 	}
 	s.chromeCmd = cmd
 	debugf("login session chromium started: id=%s pid=%d", s.ID, cmd.Process.Pid)
-	go s.waitOnProcess("chromium", cmd)
+	go s.waitOnChromium(cmd)
 	return nil
+}
+
+func (s *LoginSession) waitOnChromium(cmd *exec.Cmd) {
+	debugf("login session process wait begin: session=%s process=chromium pid=%d", s.ID, cmd.Process.Pid)
+	err := cmd.Wait()
+	// 如果会话已在清理中，忽略
+	select {
+	case <-s.done:
+		debugf("login session chromium exited after cleanup: session=%s", s.ID)
+		return
+	default:
+	}
+	state := s.State()
+	if state == LoginSessionRunning || state == LoginSessionStarting {
+		msg := "浏览器意外退出，请重新打开登录窗口。"
+		if err != nil {
+			debugf("login session chromium crashed: session=%s err=%v", s.ID, err)
+		} else {
+			debugf("login session chromium exited cleanly while session active: session=%s", s.ID)
+		}
+		s.setError(errors.New(msg))
+	}
 }
 
 func (s *LoginSession) waitOnProcess(name string, cmd *exec.Cmd) {
