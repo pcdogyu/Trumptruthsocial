@@ -496,6 +496,13 @@ func (s *LoginSession) monitor() {
 
 func (s *LoginSession) runCredentialLogin() {
 	debugf("login session credential automation scheduled: session=%s username=%s", s.ID, s.Username)
+	// 等待 30 秒再启动，留时间让用户手动通过 Cloudflare 人机验证
+	select {
+	case <-time.After(30 * time.Second):
+	case <-s.done:
+		debugf("login session credential automation stopped during warmup: session=%s", s.ID)
+		return
+	}
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		select {
@@ -1095,6 +1102,17 @@ func submitTruthSocialCredentialsViaDebugPort(debugPort int, username, password 
 	js := fmt.Sprintf(`(() => {
   const username = %q;
   const password = %q;
+
+  const pageURL = location.href || '';
+  // 不在 truthsocial.com 则跳过
+  if (!pageURL.includes('truthsocial.com')) {
+    return { submitted: false, page_url: pageURL, reason: 'not on truthsocial.com' };
+  }
+  // 检测到 Cloudflare 人机验证则跳过
+  if (document.querySelector('#challenge-form, .cf-challenge-running, #cf-wrapper, [data-translate="checking_browser"], .cf-turnstile, iframe[src*="challenges.cloudflare.com"]')) {
+    return { submitted: false, page_url: pageURL, reason: 'cloudflare challenge active' };
+  }
+
   const setValue = (el, value) => {
     const proto = Object.getPrototypeOf(el);
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -1107,7 +1125,6 @@ func submitTruthSocialCredentialsViaDebugPort(debugPort int, username, password 
     el.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
-  const pageURL = location.href || '';
   const userInput = document.querySelector('input[name=\"username\"], input[autocomplete=\"username\"], input[type=\"email\"], input[type=\"text\"]');
   const passInput = document.querySelector('input[name=\"password\"], input[autocomplete=\"current-password\"], input[type=\"password\"]');
   if (!userInput || !passInput) {
