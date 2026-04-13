@@ -39,8 +39,6 @@ func main() {
 		log.Fatalf("failed to initialize config: %v", err)
 	}
 
-	ensureBearerTokenOnStartup()
-
 	store, err := NewPostStore()
 	if err != nil {
 		log.Fatalf("failed to initialize store: %v", err)
@@ -51,8 +49,11 @@ func main() {
 		log.Fatalf("failed to initialize app: %v", err)
 	}
 
-	go backfillStoredTranslations(store)
-	go runMonitor(store)
+	go func() {
+		ensureBearerTokenOnStartup()
+		go backfillStoredTranslations(store)
+		go runMonitor(store)
+	}()
 
 	listenAddr := "0.0.0.0:8085"
 	log.Printf("启动 Web UI，请访问: http://%s", listenAddr)
