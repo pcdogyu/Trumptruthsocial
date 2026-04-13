@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -196,7 +197,12 @@ func resolveSystemdRunPath() (string, error) {
 
 func launchUpgradeViaShell(scriptPath string) error {
 	workDir := filepath.Dir(scriptPath)
-	cmd := exec.Command("/bin/bash", scriptPath)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd.exe", "/c", scriptPath)
+	} else {
+		cmd = exec.Command("/bin/bash", scriptPath)
+	}
 	cmd.Dir = workDir
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动升级脚本失败: %w", err)
@@ -212,11 +218,17 @@ func resolveUpgradeScriptPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	scriptPath := filepath.Join(baseDir, "upgrade.sh")
+	var scriptName string
+	if runtime.GOOS == "windows" {
+		scriptName = "upgrade.bat"
+	} else {
+		scriptName = "upgrade.sh"
+	}
+	scriptPath := filepath.Join(baseDir, scriptName)
 	if _, err := os.Stat(scriptPath); err == nil {
 		return scriptPath, nil
 	}
-	return "", fmt.Errorf("upgrade.sh not found")
+	return "", fmt.Errorf("%s not found", scriptName)
 }
 
 func resolveUpgradeBaseDir() (string, error) {
@@ -228,6 +240,13 @@ func resolveUpgradeBaseDir() (string, error) {
 		candidates = append(candidates, cwd)
 	}
 
+	var scriptName string
+	if runtime.GOOS == "windows" {
+		scriptName = "upgrade.bat"
+	} else {
+		scriptName = "upgrade.sh"
+	}
+
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		candidate = filepath.Clean(candidate)
@@ -236,12 +255,12 @@ func resolveUpgradeBaseDir() (string, error) {
 		}
 		seen[candidate] = struct{}{}
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			if _, err := os.Stat(filepath.Join(candidate, "upgrade.sh")); err == nil {
+			if _, err := os.Stat(filepath.Join(candidate, scriptName)); err == nil {
 				return candidate, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("upgrade.sh not found")
+	return "", fmt.Errorf("%s not found", scriptName)
 }
 
 func upgradeJobRunning() bool {
