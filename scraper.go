@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -438,31 +440,113 @@ func fetchHistoricalPostsViaBrowserAPIWithConfigTokens(account string, cfg Confi
 	return nil, lastErr
 }
 
+// injectSessionCookies injects cf_clearance and other saved session cookies
+// into the current browser context so Cloudflare recognises the session.
+func injectSessionCookies(ctx context.Context) error {
+	data, err := os.ReadFile("truthsocial_login_session.json")
+	if err != nil {
+		return nil // file missing is not fatal
+	}
+	var payload struct {
+		Cookies []CapturedCookie `json:"cookies"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	now := float64(time.Now().Unix())
+	for _, c := range payload.Cookies {
+		if strings.TrimSpace(c.Name) == "" || strings.TrimSpace(c.Value) == "" {
+			continue
+		}
+		if c.Expires > 0 && c.Expires < now {
+			continue // skip expired
+		}
+		cmd := network.SetCookie(c.Name, c.Value).
+			WithDomain(c.Domain).
+			WithPath(c.Path).
+			WithHTTPOnly(c.HTTPOnly).
+			WithSecure(c.Secure)
+		if c.Expires > 0 {
+			ts := cdp.TimeSinceEpoch(time.Unix(int64(c.Expires), 0))
+			cmd = cmd.WithExpires(&ts)
+		}
+		if err := cmd.Do(ctx); err != nil {
+			debugf("injectSessionCookies failed for %s: %v", c.Name, err)
+		}
+	}
+	return nil
+}
+
+// captureBrowserCookies reads all truthsocial.com cookies from the current
+// browser context and returns them as a Cookie header string.
+func captureBrowserCookies(ctx context.Context) string {
+	cookies, err := network.GetCookies().Do(ctx)
+	if err != nil {
+		debugf("captureBrowserCookies GetAllCookies failed: %v", err)
+		return ""
+	}
+	var parts []string
+	for _, c := range cookies {
+		if strings.Contains(c.Domain, "truthsocial.com") &&
+			strings.TrimSpace(c.Name) != "" && strings.TrimSpace(c.Value) != "" {
+			parts = append(parts, c.Name+"="+c.Value)
+		}
+	}
+	debugf("captureBrowserCookies: captured %d cookies for truthsocial.com", len(parts))
+	return strings.Join(parts, "; ")
+}
+
+func readAuthTokenFromBrowser(ctx context.Context) string {
+	var token string
+	_ = chromedp.Evaluate(`(() => {
+		try {
+			const raw = localStorage.getItem('truth:auth');
+			if (!raw) return '';
+			const auth = JSON.parse(raw);
+			const users = auth && auth.users ? auth.users : {};
+			const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
+			const first = current || Object.values(users)[0] || null;
+			return first && first.access_token ? first.access_token : '';
+		} catch (e) {
+			return '';
+		}
+	})()`, &token).Do(ctx)
+	return strings.TrimSpace(token)
+}
+
 func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int, userDataDir string) ([]Post, error) {
 	account := extractUsernameFromEntry(profileURL)
-	var authToken string
 	var posts []Post
 	err := runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
+		// 注入保存的 Cloudflare Cookie，让页面导航能绕过 CF 拦截
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return injectSessionCookies(ctx)
+		})); err != nil {
+			debugf("fetchPostsViaBrowserAPIWithProfile cookie inject failed: %v", err)
+		}
+
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(profileURL),
 			chromedp.WaitReady("body", chromedp.ByQuery),
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				return chromedp.Evaluate(`(() => {
-					try {
-						const raw = localStorage.getItem('truth:auth');
-						if (!raw) return '';
-						const auth = JSON.parse(raw);
-						const users = auth && auth.users ? auth.users : {};
-						const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-						const first = current || Object.values(users)[0] || null;
-						return first && first.access_token ? first.access_token : '';
-					} catch (e) {
-						return '';
-					}
-				})()`, &authToken).Do(ctx)
-			}),
 		); err != nil {
 			return err
+		}
+
+		// 导航后捕获浏览器的新鲜 Cookie（包含 Cloudflare 重新签发的 __cf_bm）
+		var freshCookies string
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			freshCookies = captureBrowserCookies(ctx)
+			return nil
+		})); err != nil {
+			debugf("fetchPostsViaBrowserAPIWithProfile cookie capture failed: %v", err)
+		}
+
+		var authToken string
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			authToken = readAuthTokenFromBrowser(ctx)
+			return nil
+		})); err != nil {
+			debugf("fetchPostsViaBrowserAPIWithProfile token read failed: %v", err)
 		}
 
 		tokens := bearerTokenCandidates(cfg, authToken)
@@ -472,7 +556,7 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchPostsViaHTTP(account, token, limit)
+			p, err := fetchPostsViaHTTPWithCookies(account, token, limit, freshCookies)
 			if err == nil {
 				posts = p
 				return nil
@@ -489,29 +573,35 @@ func fetchPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, limit int
 
 func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config, cutoff time.Time, userDataDir string) ([]Post, error) {
 	account := extractUsernameFromEntry(profileURL)
-	var authToken string
 	var posts []Post
 	err := runBrowserTaskWithProfileFallback(userDataDir, func(ctx context.Context) error {
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return injectSessionCookies(ctx)
+		})); err != nil {
+			debugf("fetchHistoricalPostsViaBrowserAPIWithProfile cookie inject failed: %v", err)
+		}
+
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(profileURL),
 			chromedp.WaitReady("body", chromedp.ByQuery),
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				return chromedp.Evaluate(`(() => {
-					try {
-						const raw = localStorage.getItem('truth:auth');
-						if (!raw) return '';
-						const auth = JSON.parse(raw);
-						const users = auth && auth.users ? auth.users : {};
-						const current = auth && auth.me && users[auth.me] ? users[auth.me] : null;
-						const first = current || Object.values(users)[0] || null;
-						return first && first.access_token ? first.access_token : '';
-					} catch (e) {
-						return '';
-					}
-				})()`, &authToken).Do(ctx)
-			}),
 		); err != nil {
 			return err
+		}
+
+		var freshCookies string
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			freshCookies = captureBrowserCookies(ctx)
+			return nil
+		})); err != nil {
+			debugf("fetchHistoricalPostsViaBrowserAPIWithProfile cookie capture failed: %v", err)
+		}
+
+		var authToken string
+		if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			authToken = readAuthTokenFromBrowser(ctx)
+			return nil
+		})); err != nil {
+			debugf("fetchHistoricalPostsViaBrowserAPIWithProfile token read failed: %v", err)
 		}
 
 		tokens := bearerTokenCandidates(cfg, authToken)
@@ -521,7 +611,7 @@ func fetchHistoricalPostsViaBrowserAPIWithProfile(profileURL string, cfg Config,
 
 		var lastErr error
 		for _, token := range tokens {
-			p, err := fetchHistoricalPostsViaHTTP(account, token, cutoff)
+			p, err := fetchHistoricalPostsViaHTTPWithCookies(account, token, cutoff, freshCookies)
 			if err == nil {
 				posts = p
 				return nil
@@ -547,8 +637,12 @@ func fetchHistoricalPostsViaBrowserAPIWithToken(ctx context.Context, account, to
 }
 
 func fetchLookupAccountViaHTTP(account, token string) (mastodonLookupAccount, error) {
+	return fetchLookupAccountViaHTTPWithCookies(account, token, "")
+}
+
+func fetchLookupAccountViaHTTPWithCookies(account, token, cookieOverride string) (mastodonLookupAccount, error) {
 	var lookupAccount mastodonLookupAccount
-	if err := doTruthSocialJSONRequest(http.MethodGet, "https://truthsocial.com/api/v1/accounts/lookup?acct="+url.QueryEscape(account), token, nil, &lookupAccount); err != nil {
+	if err := doTruthSocialJSONRequestWithCookies(http.MethodGet, "https://truthsocial.com/api/v1/accounts/lookup?acct="+url.QueryEscape(account), token, cookieOverride, nil, &lookupAccount); err != nil {
 		return mastodonLookupAccount{}, err
 	}
 	if lookupAccount.ID == "" {
@@ -558,6 +652,10 @@ func fetchLookupAccountViaHTTP(account, token string) (mastodonLookupAccount, er
 }
 
 func fetchStatusesPageViaHTTP(accountID, token string, limit int, maxID string) ([]mastodonStatus, error) {
+	return fetchStatusesPageViaHTTPWithCookies(accountID, token, limit, maxID, "")
+}
+
+func fetchStatusesPageViaHTTPWithCookies(accountID, token string, limit int, maxID string, cookieOverride string) ([]mastodonStatus, error) {
 	urlValues := url.Values{}
 	if limit > 0 {
 		urlValues.Set("limit", strconv.Itoa(limit))
@@ -572,19 +670,27 @@ func fetchStatusesPageViaHTTP(accountID, token string, limit int, maxID string) 
 	}
 
 	var statuses []mastodonStatus
-	if err := doTruthSocialJSONRequest(http.MethodGet, statusesURL, token, nil, &statuses); err != nil {
+	if err := doTruthSocialJSONRequestWithCookies(http.MethodGet, statusesURL, token, cookieOverride, nil, &statuses); err != nil {
 		return nil, err
 	}
 	return statuses, nil
 }
 
+func fetchPostsViaHTTPWithCookies(account, token string, limit int, cookies string) ([]Post, error) {
+	return fetchPostsViaHTTPInternal(account, token, limit, cookies)
+}
+
 func fetchPostsViaHTTP(account, token string, limit int) ([]Post, error) {
-	lookupAccount, err := fetchLookupAccountViaHTTP(account, token)
+	return fetchPostsViaHTTPInternal(account, token, limit, "")
+}
+
+func fetchPostsViaHTTPInternal(account, token string, limit int, cookieOverride string) ([]Post, error) {
+	lookupAccount, err := fetchLookupAccountViaHTTPWithCookies(account, token, cookieOverride)
 	if err != nil {
 		return nil, err
 	}
 
-	statuses, err := fetchStatusesPageViaHTTP(lookupAccount.ID, token, limit, "")
+	statuses, err := fetchStatusesPageViaHTTPWithCookies(lookupAccount.ID, token, limit, "", cookieOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -596,6 +702,60 @@ func fetchPostsViaHTTP(account, token string, limit int) ([]Post, error) {
 	if limit > 0 && len(posts) > limit {
 		posts = posts[:limit]
 	}
+	return posts, nil
+}
+
+func fetchHistoricalPostsViaHTTPWithCookies(account, token string, cutoff time.Time, cookieOverride string) ([]Post, error) {
+	lookupAccount, err := fetchLookupAccountViaHTTPWithCookies(account, token, cookieOverride)
+	if err != nil {
+		return nil, err
+	}
+
+	const pageLimit = 40
+	const maxPages = 20
+
+	collected := map[string]Post{}
+	maxID := ""
+	for page := 0; page < maxPages; page++ {
+		statuses, err := fetchStatusesPageViaHTTPWithCookies(lookupAccount.ID, token, pageLimit, maxID, cookieOverride)
+		if err != nil {
+			return nil, err
+		}
+		if len(statuses) == 0 {
+			break
+		}
+		log.Printf("historical page fetched for %s: page=%d statuses=%d max_id=%s", account, page+1, len(statuses), maxID)
+
+		reachedCutoff := false
+		for _, status := range statuses {
+			post := statusToPost(account, lookupAccount, status)
+			if post.ID == "" {
+				continue
+			}
+			if !cutoff.IsZero() {
+				if t := parsePostTime(post.Timestamp); !t.IsZero() && t.Before(cutoff) {
+					reachedCutoff = true
+					break
+				}
+			}
+			collected[post.ID] = post
+		}
+		if reachedCutoff {
+			break
+		}
+
+		lastID := strings.TrimSpace(statuses[len(statuses)-1].ID)
+		if lastID == "" || lastID == maxID || len(statuses) < pageLimit {
+			break
+		}
+		maxID = lastID
+	}
+
+	posts := make([]Post, 0, len(collected))
+	for _, post := range collected {
+		posts = append(posts, post)
+	}
+	sortPostsByFreshness(posts)
 	return posts, nil
 }
 
@@ -664,16 +824,36 @@ func loadSessionCookieHeader() string {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return ""
 	}
+	now := float64(time.Now().Unix())
 	var parts []string
 	for _, c := range payload.Cookies {
-		if strings.TrimSpace(c.Name) != "" && strings.TrimSpace(c.Value) != "" {
-			parts = append(parts, c.Name+"="+c.Value)
+		if strings.TrimSpace(c.Name) == "" || strings.TrimSpace(c.Value) == "" {
+			continue
 		}
+		// 跳过已过期的 Cookie（expires > 0 且已过期）
+		if c.Expires > 0 && c.Expires < now {
+			debugf("loadSessionCookieHeader skipping expired cookie: name=%s expires=%.0f now=%.0f", c.Name, c.Expires, now)
+			continue
+		}
+		parts = append(parts, c.Name+"="+c.Value)
 	}
+	debugf("loadSessionCookieHeader: sending %d cookies: %v", len(parts), func() []string {
+		names := make([]string, 0, len(parts))
+		for _, p := range payload.Cookies {
+			if p.Expires <= 0 || p.Expires >= now {
+				names = append(names, p.Name)
+			}
+		}
+		return names
+	}())
 	return strings.Join(parts, "; ")
 }
 
 func doTruthSocialJSONRequest(method, rawURL, token string, body io.Reader, target any) error {
+	return doTruthSocialJSONRequestWithCookies(method, rawURL, token, "", body, target)
+}
+
+func doTruthSocialJSONRequestWithCookies(method, rawURL, token, cookieOverride string, body io.Reader, target any) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(method, rawURL, body)
 	if err != nil {
@@ -690,7 +870,10 @@ func doTruthSocialJSONRequest(method, rawURL, token string, body io.Reader, targ
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
-	if cookieHeader := loadSessionCookieHeader(); cookieHeader != "" {
+	// 优先使用浏览器捕获的新鲜 Cookie，否则回退到文件中保存的 Cookie
+	if cookieOverride != "" {
+		req.Header.Set("Cookie", cookieOverride)
+	} else if cookieHeader := loadSessionCookieHeader(); cookieHeader != "" {
 		req.Header.Set("Cookie", cookieHeader)
 	}
 
