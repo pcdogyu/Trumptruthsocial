@@ -1,34 +1,383 @@
-{% extends "layout.html" %}
-
-{% block title %}配置{% endblock %}
-
-{% block content %}
-<h1 class="mt-5">配置</h1>
-
-<form method="POST" action="{{ url_for('save_config_route') }}">
-    <!-- Truth Social 认证设置 -->
-    <div class="form-group">
-        <label for="bearer_token">Bearer Token:</label>
-        <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{ masked_bearer_token }}">
-        <small class="form-text text-muted">从 `get_token.py` 获取的认证令牌。</small>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body { display: flex; flex-direction: column; padding-top: 70px; overflow-y: auto; padding-bottom: 20px; }
+        .footer { width: 100%; line-height: 1.5; background-color: #f5f5f5; text-align: center; flex-shrink: 0; padding: 10px 0; }
+        .page-shell { flex-grow: 1; }
+        .login-status { display: block; margin-top: 0.35rem; }
+        .upgrade-nav-link { color: #fff !important; font-weight: 700; }
+        .upgrade-nav-link:hover { color: #fff !important; text-decoration: underline; }
+        .upgrade-float-window {
+            position: fixed;
+            top: 74px;
+            right: 20px;
+            width: min(720px, calc(100vw - 40px));
+            z-index: 1060;
+        }
+        .upgrade-float-window .card { border: 1px solid rgba(0, 0, 0, 0.15); }
+        .upgrade-log-box {
+            height: 420px;
+            max-height: 60vh;
+            overflow: auto;
+            background: #0f172a;
+            color: #e5e7eb;
+            padding: 12px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.85rem;
+        }
+        @media (max-width: 768px) {
+            .upgrade-float-window {
+                top: 66px;
+                right: 10px;
+                left: 10px;
+                width: auto;
+            }
+            .upgrade-log-box { height: 300px; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
+    <a class="navbar-brand" href="/">TruthSocial Monitor</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+        <ul class="navbar-nav mr-auto">
+            <li class="nav-item {{if eq .ActivePage "config"}}active{{end}}"><a class="nav-link" href="/">配置</a></li>
+            <li class="nav-item {{if eq .ActivePage "ai"}}active{{end}}"><a class="nav-link" href="/ai_config">AI 配置</a></li>
+            <li class="nav-item {{if eq .ActivePage "translation"}}active{{end}}"><a class="nav-link" href="/translation_config">翻译设置</a></li>
+            <li class="nav-item {{if eq .ActivePage "message"}}active{{end}}"><a class="nav-link" href="/message_push">消息推送</a></li>
+            <li class="nav-item {{if eq .ActivePage "content"}}active{{end}}"><a class="nav-link" href="/content">内容</a></li>
+        </ul>
+        <ul class="navbar-nav ml-auto">
+            <li class="nav-item">
+                <a class="nav-link upgrade-nav-link" href="#" id="upgradeButton">升级</a>
+            </li>
+        </ul>
     </div>
-    <div class="form-group">
-        <label for="truthsocial_username">Truth Social 用户名:</label>
-        <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{ config.auth.truthsocial_username if config.auth else '' }}">
-        <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。</small>
-    </div>
-    <div class="form-group">
-        <label for="refresh_interval">刷新间隔:</label>
-        <input type="text" class="form-control" id="refresh_interval" name="refresh_interval" value="{{ config.refresh_interval if config.refresh_interval else '5m' }}">
-        <small class="form-text text-muted">例如: 5m (5分钟), 1h (1小时)。</small>
-    </div>
+</nav>
 
-    <div class="form-group">
-        <label for="accounts_to_monitor">监控账户 (每行一个用户名):</label>
-        <textarea class="form-control" id="accounts_to_monitor" name="accounts_to_monitor" rows="5">{{ "\n".join(config.accounts_to_monitor) if config.accounts_to_monitor else '' }}</textarea>
-        <small class="form-text text-muted">要监控的 Truth Social 用户名，每行一个。</small>
+<div id="upgradeFloatingWindow" class="upgrade-float-window d-none">
+    <div class="card shadow-lg">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>升级日志</strong>
+            <button type="button" class="close" aria-label="Close" id="closeUpgradeWindow">
+                <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="card-body">
+            <div id="upgradeStatusText" class="text-muted mb-2">等待升级任务启动。</div>
+            <div id="upgradeLogContent" class="upgrade-log-box">点击“升级”后，这里会显示升级脚本的实时日志。</div>
+            <div class="mt-3">
+                <div class="text-muted small mb-1">服务器状态</div>
+                <div id="serverStatusText" class="alert alert-light border mb-2 py-2">等待获取服务器状态。</div>
+                <div class="text-muted small mb-1">启动后最新20条日志</div>
+                <div id="serverLogContent" class="upgrade-log-box" style="height: 180px;">等待获取服务器启动日志。</div>
+            </div>
+        </div>
     </div>
+</div>
 
-    <button type="submit" class="btn btn-primary">保存配置</button>
-</form>
-{% endblock %}
+<main role="main" class="container page-shell">
+    {{if .Message}}
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        {{.Message}}
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+    </div>
+    {{end}}
+    <h1 class="mt-5">配置</h1>
+    <form method="POST" action="/save_config">
+        <div class="form-group">
+            <label for="bearer_token">Bearer Token:</label>
+            <div class="input-group">
+                <input type="text" class="form-control" id="bearer_token" name="bearer_token" value="{{.BearerTokenValue}}">
+                <div class="input-group-append">
+                    <button type="button" class="btn btn-outline-secondary" id="remoteDesktopButton">远程登录</button>
+                </div>
+            </div>
+            <small class="form-text text-muted">运行 `go run . get-token` 后，登录成功会自动写回 `config.yaml`。系统会保留最近 3 个 Token。</small>
+        </div>
+        <div class="form-group">
+            <label for="bearer_token_validity_days">Bearer Token 有效期（天）:</label>
+            <input type="number" class="form-control" id="bearer_token_validity_days" name="bearer_token_validity_days" min="1" value="{{.Config.Auth.BearerTokenValidityDays}}">
+            <small class="form-text text-muted">默认 5 天。超过有效期后，启动时会自动打开浏览器获取新 Token。</small>
+        </div>
+        <div class="form-group">
+            <label for="truthsocial_username">Truth Social 用户名:</label>
+            <div class="input-group">
+                <input type="text" class="form-control" id="truthsocial_username" name="truthsocial_username" value="{{.Config.Auth.TruthSocialUsername}}">
+                <div class="input-group-append">
+                    <button type="button" class="btn btn-outline-primary" id="truthsocialLoginButton">登录</button>
+                </div>
+            </div>
+            <small class="form-text text-muted">您在 Truth Social 上的用户名，例如 'pcdogyuhao'。点击右侧“登录”按钮可打开浏览器登录并抓取 Bearer Token。</small>
+            <small class="form-text text-muted login-status" id="truthsocialLoginStatus"></small>
+        </div>
+        <div class="form-group">
+            <label for="truthsocial_password">Truth Social 密码:</label>
+            <input type="password" class="form-control" id="truthsocial_password" name="truthsocial_password" value="{{.TruthSocialPasswordValue}}" autocomplete="current-password">
+            <small class="form-text text-muted">保存后，点击“登录”会先用用户名和密码自动登录 Truth Social；如果出现 Cloudflare 人机验证或其他额外验证，远程窗口会保留给您人工处理。</small>
+        </div>
+        <div class="form-group">
+            <label for="refresh_interval">刷新间隔:</label>
+            <input type="text" class="form-control" id="refresh_interval" name="refresh_interval" value="{{.Config.RefreshInterval}}">
+            <small class="form-text text-muted">例如: 5m (5分钟), 1h (1小时)。</small>
+        </div>
+        <div class="form-group">
+            <label for="accounts_to_monitor">监控账户 (每行一个用户名或 URL):</label>
+            <textarea class="form-control" id="accounts_to_monitor" name="accounts_to_monitor" rows="5">{{.AccountsText}}</textarea>
+            <small class="form-text text-muted">要监控的 Truth Social 用户名或完整主页 URL，每行一个。</small>
+        </div>
+        <button type="submit" class="btn btn-primary">保存配置</button>
+    </form>
+</main>
+
+<footer class="footer">
+    <div class="container">
+        <span class="text-muted">Code by Yuhao@jiansutech.com - {{.Git.Time}} - {{.Git.Hash}} - {{.Git.Branch}}</span>
+    </div>
+</footer>
+
+<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+<script>
+    $(document).ready(function() {
+        var upgradePollTimer = null;
+        var loginRequestTimeout = null;
+
+        function setLoginStatus(message, type) {
+            var $status = $('#truthsocialLoginStatus');
+            $status.removeClass('text-muted text-info text-success text-danger text-warning');
+            $status.addClass(type ? 'text-' + type : 'text-muted');
+            $status.text(message || '');
+        }
+
+        function setUpgradeStatus(message, type) {
+            var $status = $('#upgradeStatusText');
+            $status.removeClass('text-muted text-info text-success text-warning text-danger');
+            $status.addClass(type ? 'text-' + type : 'text-muted');
+            $status.text(message || '');
+        }
+
+        function setUpgradeLog(message) {
+            var $log = $('#upgradeLogContent');
+            $log.text(message || '等待升级日志...');
+            $log.scrollTop($log[0].scrollHeight);
+        }
+
+        function setServerStatus(message, type) {
+            var $status = $('#serverStatusText');
+            $status.removeClass('alert-light alert-info alert-success alert-warning alert-danger');
+            $status.addClass(type ? 'alert-' + type : 'alert-light');
+            $status.text(message || '');
+        }
+
+        function setServerLog(message) {
+            var $log = $('#serverLogContent');
+            $log.text(message || '等待获取服务器启动日志。');
+            $log.scrollTop($log[0].scrollHeight);
+        }
+
+        function showUpgradeWindow() {
+            $('#upgradeFloatingWindow').removeClass('d-none');
+        }
+
+        function stopUpgradePolling() {
+            if (upgradePollTimer) {
+                clearInterval(upgradePollTimer);
+                upgradePollTimer = null;
+            }
+        }
+
+        function pollUpgradeLog() {
+            $.ajax({
+                url: '/upgrade/log',
+                type: 'GET',
+                cache: false,
+                success: function(response) {
+                    showUpgradeWindow();
+                    if (response.status === 'running') {
+                        setUpgradeStatus('升级正在执行，请稍候。', 'warning');
+                    } else if (response.status === 'finished') {
+                        setUpgradeStatus('升级已完成。', 'success');
+                    } else {
+                        setUpgradeStatus('等待升级任务。', 'info');
+                    }
+                    setUpgradeLog(response.log || '暂无升级日志，等待脚本输出...');
+                    setServerStatus(response.server_status || '服务器状态: 未知', 'info');
+                    setServerLog(response.server_log || '暂无启动后日志。');
+                    if (response.finished) {
+                        stopUpgradePolling();
+                    }
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '读取升级日志失败。';
+                    setUpgradeStatus(errorMsg, 'danger');
+                    setUpgradeLog(errorMsg);
+                    setServerStatus('服务器状态获取失败。', 'danger');
+                    setServerLog('服务器启动日志获取失败。');
+                    stopUpgradePolling();
+                }
+            });
+        }
+
+        function startUpgradePolling() {
+            stopUpgradePolling();
+            pollUpgradeLog();
+            upgradePollTimer = setInterval(pollUpgradeLog, 1000);
+        }
+
+        function startUpgradeFlow($button, originalText) {
+            showUpgradeWindow();
+            setUpgradeStatus('正在启动升级任务...', 'info');
+            setUpgradeLog('正在启动升级任务，请稍候...');
+            setServerStatus('正在等待服务器状态更新...', 'info');
+            setServerLog('正在等待服务器启动日志...');
+            $.ajax({
+                url: '/upgrade',
+                type: 'POST',
+                success: function(response) {
+                    setUpgradeStatus(response.message || '升级任务已启动。', 'warning');
+                    startUpgradePolling();
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : '升级启动失败。';
+                    setUpgradeStatus(errorMsg, 'danger');
+                    setUpgradeLog(errorMsg);
+                    stopUpgradePolling();
+                },
+                complete: function() {
+                    if ($button && originalText) {
+                        $button.removeClass('disabled').text(originalText);
+                    }
+                }
+            });
+        }
+
+        function openRemoteSession(options) {
+            options = options || {};
+            var endpoint = options.endpoint || '/truthsocial/login';
+            var statusOpeningText = options.openingText || '正在启动远程登录窗口，请稍候。';
+            var statusSuccessText = options.successText || '远程登录窗口已打开。';
+            var requestData = options.data || {};
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('打开中...');
+            setLoginStatus(statusOpeningText, 'info');
+            var loginPopup = window.open('', '_blank', 'width=1440,height=980');
+            if (loginPopup) {
+                try {
+                    loginPopup.document.write('<!doctype html><html><head><title>Truth Social 登录窗口</title><style>body{font-family:sans-serif;margin:2rem;background:#0f172a;color:#e5e7eb;} .card{max-width:720px;margin:auto;background:#111827;padding:1.5rem 1.75rem;border-radius:14px;border:1px solid rgba(255,255,255,.08);box-shadow:0 20px 60px rgba(0,0,0,.35);} .muted{color:#94a3b8;}</style></head><body><div class="card"><h2>正在启动远程登录窗口...</h2><p class="muted">请稍候，窗口加载完成后会自动跳转到 Truth Social 的远程桌面登录页。</p></div></body></html>');
+                    loginPopup.document.close();
+                } catch (err) {}
+            }
+
+            loginRequestTimeout = setTimeout(function() {
+                setLoginStatus('登录请求超时，请稍后重试。', 'warning');
+                $button.prop('disabled', false).text(originalText);
+                if (loginPopup && !loginPopup.closed) {
+                    loginPopup.close();
+                }
+            }, 5 * 60 * 1000);
+
+            $.ajax({
+                url: endpoint,
+                type: 'POST',
+                data: requestData,
+                dataType: 'json',
+                success: function(response) {
+                    if (loginRequestTimeout) {
+                        clearTimeout(loginRequestTimeout);
+                        loginRequestTimeout = null;
+                    }
+
+                    if (response.status === 'success') {
+                        setLoginStatus(response.message || statusSuccessText, 'success');
+                        if (response.viewer_url) {
+                            if (loginPopup && !loginPopup.closed) {
+                                loginPopup.location = response.viewer_url;
+                            } else {
+                                window.location.href = response.viewer_url;
+                            }
+                        }
+                    } else {
+                        setLoginStatus(response.message || '登录失败。', 'danger');
+                        if (loginPopup && !loginPopup.closed) {
+                            loginPopup.close();
+                        }
+                    }
+                },
+                error: function(xhr) {
+                    if (loginRequestTimeout) {
+                        clearTimeout(loginRequestTimeout);
+                        loginRequestTimeout = null;
+                    }
+
+                    var errorMsg = '登录失败。';
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMsg = xhr.responseJSON.message;
+                    } else if (xhr.responseText) {
+                        errorMsg = xhr.responseText;
+                    }
+                    setLoginStatus(errorMsg, 'danger');
+                    if (loginPopup && !loginPopup.closed) {
+                        loginPopup.close();
+                    }
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
+                }
+            });
+        }
+
+        $('#truthsocialLoginButton').on('click', function() {
+            openRemoteSession.call(this, {
+                endpoint: '/truthsocial/login',
+                openingText: '正在启动 Truth Social 登录窗口，请稍候。',
+                successText: 'Truth Social 登录窗口已打开。',
+                data: {
+                    source: 'web-ui',
+                    truthsocial_username: $('#truthsocial_username').val(),
+                    truthsocial_password: $('#truthsocial_password').val()
+                }
+            });
+        });
+
+        $('#remoteDesktopButton').on('click', function() {
+            openRemoteSession.call(this, {
+                endpoint: '/desktop/start',
+                openingText: '正在启动服务器远程桌面，请稍候。',
+                successText: '服务器远程桌面已打开。',
+                data: {
+                    source: 'web-ui'
+                }
+            });
+        });
+
+        $('#upgradeButton').on('click', function(e) {
+            e.preventDefault();
+            var $button = $(this);
+            var originalText = $button.text();
+            $button.addClass('disabled').text('升级中...');
+            startUpgradeFlow($button, originalText);
+        });
+
+        $('#closeUpgradeWindow').on('click', function() {
+            stopUpgradePolling();
+            $('#upgradeFloatingWindow').addClass('d-none');
+        });
+    });
+</script>
+</body>
+</html>

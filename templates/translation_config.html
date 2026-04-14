@@ -88,27 +88,48 @@
 </div>
 
 <main role="main" class="container page-shell">
-    <h1 class="mt-5">消息推送配置</h1>
-    <div class="alert alert-info" role="alert">
-        <p>在此配置 Telegram 机器人，用于接收新帖子通知。</p>
+    <h1 class="mt-5">翻译设置</h1>
+    {{if .Message}}
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        {{.Message}}
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
     </div>
-    <form id="telegramConfigForm" class="mt-4">
-        <div class="form-group">
-            <label for="botToken">Telegram Bot Token</label>
-            <div class="input-group mb-3">
-                <input type="text" class="form-control" id="botToken" name="bot_token" value="{{.BotToken}}" placeholder="请输入您的 Telegram Bot Token" autocomplete="off" required>
-            </div>
+    {{end}}
+    <form method="POST" action="/translation_config/save">
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="translation_enabled" name="translation_enabled" {{if .Config.Translation.Enabled}}checked{{end}}>
+            <label class="form-check-label" for="translation_enabled">启用翻译</label>
         </div>
         <div class="form-group">
-            <label for="chatId">Telegram Chat ID</label>
-            <div class="input-group mb-3">
-                <input type="text" class="form-control" id="chatId" name="chat_id" value="{{.ChatID}}" placeholder="请输入您希望接收消息的 Chat ID" autocomplete="off" required>
-            </div>
+            <label for="translation_api_url">翻译 API URL:</label>
+            <input type="text" class="form-control" id="translation_api_url" name="translation_api_url" value="{{.Config.Translation.APIURL}}">
         </div>
-        <button type="submit" class="btn btn-primary">保存配置</button>
-        <button type="button" id="testMessageButton" class="btn btn-success ml-2">测试消息</button>
+        <div class="form-group">
+            <label for="translation_api_key">翻译 API Key:</label>
+            <input type="password" class="form-control" id="translation_api_key" name="translation_api_key" value="{{.TranslationAPIKeyValue}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_model">模型名称:</label>
+            <input type="text" class="form-control" id="translation_model" name="translation_model" value="{{.Config.Translation.Model}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_source_language">源语言:</label>
+            <input type="text" class="form-control" id="translation_source_language" name="translation_source_language" value="{{.Config.Translation.SourceLanguage}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_target_language">目标语言:</label>
+            <input type="text" class="form-control" id="translation_target_language" name="translation_target_language" value="{{.Config.Translation.TargetLanguage}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_timeout_seconds">请求超时（秒）:</label>
+            <input type="number" class="form-control" id="translation_timeout_seconds" name="translation_timeout_seconds" min="1" value="{{.Config.Translation.TimeoutSeconds}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_prompt">翻译提示词:</label>
+            <textarea class="form-control" id="translation_prompt" name="translation_prompt" rows="3">{{.Config.Translation.Prompt}}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">保存翻译设置</button>
     </form>
-    <div id="messageArea" class="mt-3"></div>
 </main>
 
 <footer class="footer">
@@ -123,20 +144,6 @@
 <script>
     $(document).ready(function() {
         var upgradePollTimer = null;
-
-        function displaySyncMessage(message, type = 'info') {
-            var alertClass = 'alert-' + type;
-            var messageHtml = '<div class="alert ' + alertClass + ' alert-dismissible fade show" role="alert">' +
-                message +
-                '<button type="button" class="close" data-dismiss="alert" aria-label="Close">' +
-                '<span aria-hidden="true">&times;</span>' +
-                '</button>' +
-                '</div>';
-            $('#messageArea').html(messageHtml);
-            setTimeout(function() {
-                $('#messageArea .alert').alert('close');
-            }, 3000);
-        }
 
         function setUpgradeStatus(message, type) {
             var $status = $('#upgradeStatusText');
@@ -239,49 +246,6 @@
                 }
             });
         }
-
-        $('#telegramConfigForm').on('submit', function(e) {
-            e.preventDefault();
-            var $submitButton = $(this).find('button[type="submit"]');
-            $submitButton.prop('disabled', true).text('保存中...');
-            $('#messageArea').empty();
-            $.ajax({
-                url: '/message_push/save',
-                type: 'POST',
-                data: { bot_token: $('#botToken').val(), chat_id: $('#chatId').val() },
-                success: function(response) {
-                    displaySyncMessage(response.message, 'success');
-                },
-                error: function(xhr) {
-                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "保存失败，请检查服务器日志。";
-                    displaySyncMessage(errorMsg, 'danger');
-                },
-                complete: function() {
-                    $submitButton.prop('disabled', false).text('保存配置');
-                }
-            });
-        });
-
-        $('#testMessageButton').on('click', function() {
-            var $button = $(this);
-            var originalText = $button.text();
-            $button.prop('disabled', true).text('发送中...');
-            $('#messageArea').empty();
-            $.ajax({
-                url: '/message_push/test',
-                type: 'POST',
-                success: function(response) {
-                    displaySyncMessage(response.message, 'success');
-                },
-                error: function(xhr) {
-                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "测试消息发送失败。";
-                    displaySyncMessage(errorMsg, 'danger');
-                },
-                complete: function() {
-                    $button.prop('disabled', false).text(originalText);
-                }
-            });
-        });
 
         $('#upgradeButton').on('click', function(e) {
             e.preventDefault();

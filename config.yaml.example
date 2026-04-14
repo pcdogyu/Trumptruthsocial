@@ -8,8 +8,13 @@ accounts_to_monitor:
 # Truth Social 认证设置 (可选)
 # 如果您有 Bearer Token，可以填入这里以进行认证抓取
 auth:
-  bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN" # 从 get_token.py 获取
+  bearer_token: "YOUR_TRUTHSOCIAL_BEARER_TOKEN" # 运行 go run . get-token 获取
+  bearer_token_backup_1: ""
+  bearer_token_backup_2: ""
+  bearer_token_updated_at: ""
+  bearer_token_validity_days: 5
   truthsocial_username: "YOUR_TRUTHSOCIAL_USERNAME" # 您在 Truth Social 的用户名
+  truthsocial_password: "" # 可选，点击“登录”时用于自动填充密码
 
 # Telegram 通知设置
 telegram:
@@ -21,6 +26,16 @@ ai_analysis:
   enabled: false
   api_key: "YOUR_AI_API_KEY"
   prompt: "Summarize the main point of the following text in one short sentence:"
+
+translation:
+  enabled: false
+  api_url: "YOUR_TRANSLATION_API_URL"
+  api_key: "YOUR_TRANSLATION_API_KEY"
+  model: "YOUR_TRANSLATION_MODEL"
+  source_language: "auto"
+  target_language: "zh-CN"
+  timeout_seconds: 30
+  prompt: "Translate the following text into the target language, preserving meaning and tone:"
 
 # 刷新间隔 (例如 "5m" 代表 5 分钟, "1h" 代表 1 小时)
 refresh_interval: "5m"

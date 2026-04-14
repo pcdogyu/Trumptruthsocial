@@ -17,6 +17,21 @@ config.yaml
 
 # Database file
 monitor.db
+posts.json
+
+# PEM keys / certificates
+/pem/
+*.pem
+truthsocial_login_session.json
+.chrome-token-profile/
+
+# Go runtime artifacts and logs
+go.log
+go-*.log.gz
+upgrade.log
+truthsocial.exe
+truthsocial.exe~
+.chrome-profile/
 
 # Screenshot files for debugging
 login_error.png

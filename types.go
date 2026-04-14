@@ -1,0 +1,168 @@
+package main
+
+import "time"
+
+type AuthConfig struct {
+	BearerToken             string `json:"bearer_token"`
+	BearerTokenBackup1      string `json:"bearer_token_backup_1"`
+	BearerTokenBackup2      string `json:"bearer_token_backup_2"`
+	BearerTokenUpdatedAt    string `json:"bearer_token_updated_at"`
+	BearerTokenValidityDays int    `json:"bearer_token_validity_days"`
+	TruthSocialUsername     string `json:"truthsocial_username"`
+	TruthSocialPassword     string `json:"truthsocial_password"`
+}
+
+type TelegramConfig struct {
+	BotToken string `json:"bot_token"`
+	ChatID   string `json:"chat_id"`
+}
+
+type AIAnalysisConfig struct {
+	Enabled bool   `json:"enabled"`
+	APIKey  string `json:"api_key"`
+	Prompt  string `json:"prompt"`
+}
+
+type TranslationConfig struct {
+	Enabled        bool   `json:"enabled"`
+	APIURL         string `json:"api_url"`
+	APIKey         string `json:"api_key"`
+	Model          string `json:"model"`
+	SourceLanguage string `json:"source_language"`
+	TargetLanguage string `json:"target_language"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Prompt         string `json:"prompt"`
+}
+
+type Config struct {
+	AccountsToMonitor []string          `json:"accounts_to_monitor"`
+	Auth              AuthConfig        `json:"auth"`
+	Telegram          TelegramConfig    `json:"telegram"`
+	AIAnalysis        AIAnalysisConfig  `json:"ai_analysis"`
+	Translation       TranslationConfig `json:"translation"`
+	RefreshInterval   string            `json:"refresh_interval"`
+	Selectors         map[string]string `json:"selectors"`
+}
+
+type Post struct {
+	ID                string `json:"id"`
+	Username          string `json:"username"`
+	Content           string `json:"content"`
+	TranslatedContent string `json:"translated_content,omitempty"`
+	TranslatedAt      string `json:"translated_at,omitempty"`
+	TranslationError  string `json:"translation_error,omitempty"`
+	WebURL            string `json:"web_url"`
+	ImageURL          string `json:"image_url"`
+	VideoURL          string `json:"video_url"`
+	Timestamp         string `json:"timestamp"`
+	Status            string `json:"status"`
+	RawData           string `json:"raw_data,omitempty"`
+	SentToTelegram    bool   `json:"sent_to_telegram"`
+}
+
+type GitInfo struct {
+	Time   string
+	Hash   string
+	Branch string
+}
+
+type IndexPageData struct {
+	Title                    string
+	ActivePage               string
+	Git                      GitInfo
+	Message                  string
+	Config                   Config
+	AccountsText             string
+	BearerTokenValue         string
+	TruthSocialPasswordValue string
+	AIApiKeyValue            string
+}
+
+type ContentPageData struct {
+	Title            string
+	ActivePage       string
+	Git              GitInfo
+	Posts            []Post
+	Usernames        []string
+	SelectedUsername string
+	CurrentPage      int
+	PageSize         int
+	TotalPosts       int
+	TotalPages       int
+	PaginationLinks  []PaginationLink
+}
+
+type PaginationLink struct {
+	Label    string
+	URL      string
+	Active   bool
+	Disabled bool
+}
+
+type MessagePushPageData struct {
+	Title      string
+	ActivePage string
+	Git        GitInfo
+	BotToken   string
+	ChatID     string
+}
+
+type AIConfigPageData struct {
+	Title         string
+	ActivePage    string
+	Git           GitInfo
+	Config        Config
+	AIApiKeyValue string
+}
+
+type TranslationConfigPageData struct {
+	Title                  string
+	ActivePage             string
+	Git                    GitInfo
+	Message                string
+	Config                 Config
+	TranslationAPIKeyValue string
+}
+
+type LoginSessionPageData struct {
+	Title       string
+	ActivePage  string
+	Git         GitInfo
+	SessionID   string
+	Username    string
+	Message     string
+	SessionKind string
+}
+
+type SyncResponse struct {
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+	NewPosts int    `json:"new_posts,omitempty"`
+}
+
+type SyncRequest struct {
+	Days int `json:"days"`
+}
+
+type BulkActionRequest struct {
+	Action string   `json:"action"`
+	IDs    []string `json:"ids"`
+}
+
+const (
+	PostStatusNormal  = "normal"
+	PostStatusBlocked = "blocked"
+)
+
+func normalizeTimeString(s string) string {
+	if s == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return s
+}

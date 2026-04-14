@@ -1,6 +1,5 @@
-
 <!DOCTYPE html>
-<html lang="zh-cn">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,45 +7,12 @@
     <style>
         body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
         .container { max-width: 800px; margin: auto; padding: 2em; background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1 { color: #333; }
-        .nav-links { margin-bottom: 1.5em; font-size: 1.2em; border-bottom: 1px solid #eee; padding-bottom: 1em;}
-        .nav-links a { text-decoration: none; color: #007bff; margin-right: 1em; }
-        .nav-links a.active { font-weight: bold; }
-        .post { border: 1px solid #ddd; border-radius: 5px; padding: 1em; margin-bottom: 1em; background-color: #fdfdfd; }
-        .post-video { margin-bottom: 1em; }
-        .post-header { font-weight: bold; margin-bottom: 0.5em; color: #555; }
-        .post-content { white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; }
-        .post-footer { margin-top: 1em; font-size: 0.9em; text-align: right; }
-        .post-footer a { text-decoration: none; color: #007bff; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>历史记录</h1>
-        <div class="nav-links">
-            <a href="{{ url_for('settings') }}">配置</a> | <a href="{{ url_for('history') }}" class="active">历史记录</a>
-        </div>
-        {% if posts %}
-            {% for post in posts %}
-            <div class="post">
-                <div class="post-header">@{{ post.username }}</div>
-                {% if post.video_url %}
-                <div class="post-video">
-                    <video controls preload="metadata" style="max-width: 100%; border-radius: 5px;">
-                        <source src="{{ post.video_url }}" type="video/mp4">
-                        您的浏览器不支持视频播放。
-                    </video>
-                </div>
-                {% endif %}
-                {% if post.content %}
-                <div class="post-content">{{ post.content }}</div>
-                {% endif %}
-                <div class="post-footer"><a href="{{ post.web_url }}" target="_blank" rel="noopener noreferrer">查看原文 &rarr;</a></div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <p>暂无历史记录。请等待后台脚本抓取到新帖子。</p>
-        {% endif %}
+        <p>此页面在 Go 版中由 /content 接口替代。</p>
     </div>
 </body>
 </html>
