@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// urlRe 匹配完整 URL（http/https），翻译前从正文中剥离以节省 token。
+var urlRe = regexp.MustCompile(`https?://\S+`)
 
 const defaultTranslationPrompt = "Translate the following text into the target language, preserving meaning and tone:"
 
@@ -66,8 +70,18 @@ func hydratePostTranslationFromStore(store *PostStore, post *Post) {
 	}
 }
 
+// stripURLsForTranslation 去除正文中的 URL，保留 URL 后的非链接文字。
+// 例：" check https://t.co/abc/xyz out" → " check  out"
+func stripURLsForTranslation(text string) string {
+	return strings.TrimSpace(urlRe.ReplaceAllString(text, ""))
+}
+
 func translateText(cfg Config, content string) (string, error) {
 	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", nil
+	}
+	content = stripURLsForTranslation(content)
 	if content == "" {
 		return "", nil
 	}
