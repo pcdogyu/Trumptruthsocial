@@ -27,6 +27,8 @@ type TranslationConfig struct {
 	Enabled        bool   `json:"enabled"`
 	APIURL         string `json:"api_url"`
 	APIKey         string `json:"api_key"`
+	SecretKey      string `json:"secret_key"`
+	Region         string `json:"region"`
 	Model          string `json:"model"`
 	SourceLanguage string `json:"source_language"`
 	TargetLanguage string `json:"target_language"`
@@ -116,12 +118,13 @@ type AIConfigPageData struct {
 }
 
 type TranslationConfigPageData struct {
-	Title                  string
-	ActivePage             string
-	Git                    GitInfo
-	Message                string
-	Config                 Config
-	TranslationAPIKeyValue string
+	Title                       string
+	ActivePage                  string
+	Git                         GitInfo
+	Message                     string
+	Config                      Config
+	TranslationAPIKeyValue      string
+	TranslationSecretKeyValue   string
 }
 
 type LoginSessionPageData struct {

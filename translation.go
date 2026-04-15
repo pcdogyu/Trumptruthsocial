@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -40,6 +44,10 @@ func enrichPostTranslation(cfg Config, post *Post, allowRetry bool) {
 		return
 	}
 	if strings.TrimSpace(post.TranslatedContent) != "" && strings.TrimSpace(post.TranslationError) == "" {
+		return
+	}
+	// 已处理过但内容仅含URL（TranslatedAt已设置、内容为空、无错误），跳过重试
+	if strings.TrimSpace(post.TranslatedAt) != "" && strings.TrimSpace(post.TranslatedContent) == "" && strings.TrimSpace(post.TranslationError) == "" {
 		return
 	}
 	if !allowRetry && strings.TrimSpace(post.TranslationError) != "" {
@@ -92,6 +100,12 @@ func translateText(cfg Config, content string) (string, error) {
 	apiURL := strings.TrimSpace(cfg.Translation.APIURL)
 	if apiURL == "" || strings.Contains(apiURL, "YOUR_TRANSLATION_API_URL") {
 		return "", errors.New("翻译 API URL 未配置")
+	}
+
+	// 腾讯云 TMT：SecretKey 不为空时使用 TC3-HMAC-SHA256 签名认证
+	secretKey := strings.TrimSpace(cfg.Translation.SecretKey)
+	if secretKey != "" && !strings.Contains(secretKey, "YOUR_") {
+		return translateTextTencent(cfg, content)
 	}
 
 	requestText := buildTranslationRequestText(cfg, content)
@@ -365,4 +379,159 @@ func backfillStoredTranslations(store *PostStore) {
 			continue
 		}
 	}
+}
+
+// ── 腾讯云机器翻译（TMT）TC3-HMAC-SHA256 实现 ──────────────────────────────
+
+func tc3HmacSHA256(key []byte, data string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return h.Sum(nil)
+}
+
+func tc3SHA256Hex(s string) string {
+	h := sha256.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// translateTextTencent 使用腾讯云 TMT TextTranslate 接口翻译文本。
+// 认证方式：TC3-HMAC-SHA256，SecretId 存于 cfg.Translation.APIKey，
+// SecretKey 存于 cfg.Translation.SecretKey。
+func translateTextTencent(cfg Config, content string) (string, error) {
+	apiURL := strings.TrimSpace(cfg.Translation.APIURL)
+	secretID := strings.TrimSpace(cfg.Translation.APIKey)
+	secretKey := strings.TrimSpace(cfg.Translation.SecretKey)
+
+	if secretID == "" || strings.Contains(secretID, "YOUR_") {
+		return "", errors.New("腾讯云 SecretId（翻译 API Key）未配置")
+	}
+
+	source := strings.TrimSpace(cfg.Translation.SourceLanguage)
+	if source == "" {
+		source = "auto"
+	}
+	target := strings.TrimSpace(cfg.Translation.TargetLanguage)
+	if target == "" {
+		target = "zh"
+	}
+
+	type tcRequest struct {
+		SourceText string `json:"SourceText"`
+		Source     string `json:"Source"`
+		Target     string `json:"Target"`
+		ProjectId  int    `json:"ProjectId"`
+	}
+	body, err := json.Marshal(tcRequest{SourceText: content, Source: source, Target: target, ProjectId: 0})
+	if err != nil {
+		return "", err
+	}
+
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return "", fmt.Errorf("无效的翻译 API URL: %v", err)
+	}
+	host := u.Hostname()
+
+	// 从主机名中提取服务名（如 "tmt.tencentcloudapi.com" → "tmt"）
+	service := "tmt"
+	if parts := strings.SplitN(host, ".", 2); len(parts) > 0 && parts[0] != "" {
+		service = parts[0]
+	}
+
+	now := time.Now().UTC()
+	timestamp := now.Unix()
+	date := now.Format("2006-01-02")
+	contentType := "application/json"
+
+	// Step 1: 构造规范请求
+	canonicalHeaders := "content-type:" + contentType + "\nhost:" + host + "\n"
+	signedHeaders := "content-type;host"
+	canonicalRequest := strings.Join([]string{
+		"POST", "/", "",
+		canonicalHeaders,
+		signedHeaders,
+		tc3SHA256Hex(string(body)),
+	}, "\n")
+
+	// Step 2: 构造待签字符串
+	credentialScope := date + "/" + service + "/tc3_request"
+	stringToSign := strings.Join([]string{
+		"TC3-HMAC-SHA256",
+		fmt.Sprintf("%d", timestamp),
+		credentialScope,
+		tc3SHA256Hex(canonicalRequest),
+	}, "\n")
+
+	// Step 3: 计算签名
+	secretDate := tc3HmacSHA256([]byte("TC3"+secretKey), date)
+	secretSvc := tc3HmacSHA256(secretDate, service)
+	secretSign := tc3HmacSHA256(secretSvc, "tc3_request")
+	signature := hex.EncodeToString(tc3HmacSHA256(secretSign, stringToSign))
+
+	authorization := fmt.Sprintf(
+		"TC3-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		secretID, credentialScope, signedHeaders, signature,
+	)
+
+	timeout := cfg.Translation.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 30
+	}
+	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+
+	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Host", host)
+	req.Header.Set("X-TC-Action", "TextTranslate")
+	req.Header.Set("X-TC-Timestamp", fmt.Sprintf("%d", timestamp))
+	req.Header.Set("X-TC-Version", "2018-03-21")
+	if region := strings.TrimSpace(cfg.Translation.Region); region != "" {
+		req.Header.Set("X-TC-Region", region)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var tcResp struct {
+		Response struct {
+			TargetText string `json:"TargetText"`
+			Error      *struct {
+				Code    string `json:"Code"`
+				Message string `json:"Message"`
+			} `json:"Error,omitempty"`
+		} `json:"Response"`
+	}
+	if err := json.Unmarshal(respBody, &tcResp); err != nil {
+		snippet := string(respBody)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return "", fmt.Errorf("解析腾讯云翻译响应失败: %v, 响应: %s", err, snippet)
+	}
+	if tcResp.Response.Error != nil {
+		return "", fmt.Errorf("腾讯云翻译 API 错误 [%s]: %s",
+			tcResp.Response.Error.Code, tcResp.Response.Error.Message)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("翻译 API HTTP 错误: %s", resp.Status)
+	}
+
+	text := strings.TrimSpace(tcResp.Response.TargetText)
+	if text == "" {
+		return "", errors.New("腾讯云翻译 API 返回空内容")
+	}
+	return text, nil
 }

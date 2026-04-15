@@ -34,7 +34,7 @@ const (
 	loginSessionHeight         = 900
 	loginSessionPollInterval   = 2 * time.Second
 	loginSessionProfilePoll    = 12 * time.Second
-	loginSessionDebugWarmup    = 60 * time.Second
+	loginSessionDebugWarmup    = 10 * time.Second
 	loginSessionTimeout        = 30 * time.Minute
 	loginSessionCleanupDelay   = 2 * time.Minute
 	loginSessionDisplayStart   = 80
@@ -500,13 +500,22 @@ func (s *LoginSession) waitOnChromium(cmd *exec.Cmd) {
 	}
 	state := s.State()
 	if state == LoginSessionRunning || state == LoginSessionStarting {
-		msg := "浏览器意外退出，请重新打开登录窗口。"
 		if err != nil {
 			debugf("login session chromium crashed: session=%s err=%v", s.ID, err)
 		} else {
 			debugf("login session chromium exited cleanly while session active: session=%s", s.ID)
 		}
-		s.setError(errors.New(msg))
+		// Chrome 退出后 localStorage 已刷盘，趁 profile 未被锁住立即尝试读取 token
+		if s.CaptureToken {
+			log.Printf("truthsocial login browser exited, attempting final token capture: session=%s", s.ID)
+			if captured, captureErr := s.tryCaptureFromProfile(); captured {
+				log.Printf("truthsocial login final token capture succeeded: session=%s", s.ID)
+				return
+			} else {
+				debugf("login session final token capture failed: session=%s err=%v", s.ID, captureErr)
+			}
+		}
+		s.setError(errors.New("浏览器已关闭，未能捕获 Token，请重新打开登录窗口。"))
 	}
 }
 

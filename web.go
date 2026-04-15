@@ -60,6 +60,7 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("/delete_post/", a.handleDeletePost)
 	mux.HandleFunc("/block_post/", a.handleBlockPost)
 	mux.HandleFunc("/forward_post/", a.handleForwardPost)
+	mux.HandleFunc("/translate_post/", a.handleTranslatePost)
 	mux.HandleFunc("/posts/bulk_action", a.handleBulkPostsAction)
 	mux.HandleFunc("/sync_content", a.handleSyncContent)
 	mux.HandleFunc("/sync_latest_post", a.handleSyncLatestPost)
@@ -484,6 +485,44 @@ func (a *App) handleForwardPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"message": message})
 }
 
+func (a *App) handleTranslatePost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	postID := strings.TrimPrefix(r.URL.Path, "/translate_post/")
+	postID = strings.TrimSpace(postID)
+	if postID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "post id required"})
+		return
+	}
+	post, ok := a.store.GetPostByID(postID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "帖子未找到。"})
+		return
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "加载配置失败: " + err.Error()})
+		return
+	}
+	enrichPostTranslation(cfg, &post, true)
+	if post.TranslatedAt != "" || post.TranslationError != "" {
+		if _, err := a.store.UpdatePostTranslation(post.ID, post.TranslatedContent, post.TranslatedAt, post.TranslationError); err != nil {
+			log.Printf("persist translation failed for %s: %v", post.ID, err)
+		}
+	}
+	if post.TranslationError != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": post.TranslationError})
+		return
+	}
+	if strings.TrimSpace(post.TranslatedContent) == "" {
+		writeJSON(w, http.StatusOK, map[string]string{"message": "帖子内容仅含链接，无文字需要翻译。"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"translated_content": post.TranslatedContent})
+}
+
 func (a *App) handleSyncContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -580,11 +619,12 @@ func (a *App) handleTranslationConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, _ := LoadConfig()
 	data := TranslationConfigPageData{
-		Title:                  "翻译设置",
-		ActivePage:             "translation",
-		Git:                    a.gitInfo,
-		Config:                 cfg,
-		TranslationAPIKeyValue: secretOrBlank(cfg.Translation.APIKey),
+		Title:                     "翻译设置",
+		ActivePage:                "translation",
+		Git:                       a.gitInfo,
+		Config:                    cfg,
+		TranslationAPIKeyValue:    secretOrBlank(cfg.Translation.APIKey),
+		TranslationSecretKeyValue: secretOrBlank(cfg.Translation.SecretKey),
 	}
 	if r.URL.Query().Get("saved") != "" {
 		data.Message = "翻译设置已保存。"
@@ -612,6 +652,14 @@ func (a *App) handleSaveTranslationConfig(w http.ResponseWriter, r *http.Request
 		}
 	}
 	cfg.Translation.APIKey = apiKey
+	secretKey := strings.TrimSpace(r.FormValue("translation_secret_key"))
+	if secretKey != "" {
+		if secretKey == maskSecret(cfg.Translation.SecretKey) {
+			secretKey = cfg.Translation.SecretKey
+		}
+	}
+	cfg.Translation.SecretKey = secretKey
+	cfg.Translation.Region = strings.TrimSpace(r.FormValue("translation_region"))
 	cfg.Translation.Model = strings.TrimSpace(r.FormValue("translation_model"))
 	cfg.Translation.SourceLanguage = strings.TrimSpace(r.FormValue("translation_source_language"))
 	cfg.Translation.TargetLanguage = strings.TrimSpace(r.FormValue("translation_target_language"))

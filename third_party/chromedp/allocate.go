@@ -233,7 +233,6 @@ func (a *ExecAllocator) Allocate(ctx context.Context, opts ...BrowserOption) (*B
 			}
 		}
 		a.wg.Done()
-		close(c.allocated)
 	}()
 
 	var wsURL string

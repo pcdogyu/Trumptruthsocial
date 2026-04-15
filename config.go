@@ -35,6 +35,7 @@ func defaultConfig() Config {
 			Enabled:        false,
 			APIURL:         "YOUR_TRANSLATION_API_URL",
 			APIKey:         "YOUR_TRANSLATION_API_KEY",
+			Region:         "ap-guangzhou",
 			Model:          "YOUR_TRANSLATION_MODEL",
 			SourceLanguage: "auto",
 			TargetLanguage: "zh-CN",
@@ -210,6 +211,12 @@ func SaveConfig(cfg Config) error {
 	b.WriteString("  api_key: ")
 	b.WriteString(quoteIfNeeded(cfg.Translation.APIKey))
 	b.WriteString("\n")
+	b.WriteString("  secret_key: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.SecretKey))
+	b.WriteString("\n")
+	b.WriteString("  region: ")
+	b.WriteString(quoteIfNeeded(cfg.Translation.Region))
+	b.WriteString("\n")
 	b.WriteString("  model: ")
 	b.WriteString(quoteIfNeeded(cfg.Translation.Model))
 	b.WriteString("\n")
@@ -310,6 +317,10 @@ func applySectionValue(cfg *Config, section, key, value string) {
 			cfg.Translation.APIURL = unquote(value)
 		case "api_key":
 			cfg.Translation.APIKey = unquote(value)
+		case "secret_key":
+			cfg.Translation.SecretKey = unquote(value)
+		case "region":
+			cfg.Translation.Region = unquote(value)
 		case "model":
 			cfg.Translation.Model = unquote(value)
 		case "source_language":

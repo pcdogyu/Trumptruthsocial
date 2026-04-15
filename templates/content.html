@@ -213,6 +213,7 @@
                     <div class="card-footer d-flex justify-content-between align-items-center">
                         <span>Post ID: {{.ID}}</span>
                         <div class="post-actions">
+                            <button class="btn btn-outline-info translate-btn" data-post-id="{{.ID}}">翻译</button>
                             <button class="btn btn-outline-secondary forward-btn" data-post-id="{{.ID}}" {{if eq .Status "blocked"}}disabled{{end}}>转发</button>
                             <button class="btn btn-outline-warning block-btn" data-post-id="{{.ID}}">屏蔽</button>
                             <button class="btn btn-outline-danger delete-btn" data-post-id="{{.ID}}">删除</button>
@@ -529,6 +530,40 @@
             if (confirm('您确定要屏蔽帖子 ' + postId + ' 吗？屏蔽后不会再次抓取或转发。')) {
                 postAction('/block_post', postId, 'success', '屏蔽帖子', true);
             }
+        });
+
+        $('.col-md-9').on('click', '.translate-btn', function() {
+            var $button = $(this);
+            var postId = $button.data('post-id');
+            var originalText = $button.text();
+            $button.prop('disabled', true).text('翻译中...');
+            $.ajax({
+                url: '/translate_post/' + postId,
+                type: 'POST',
+                success: function(response) {
+                    var $card = $button.closest('.post-card');
+                    var $existing = $card.find('.translation-area');
+                    if ($existing.length) {
+                        $existing.remove();
+                    }
+                    if (response.translated_content) {
+                        var html = '<div class="alert alert-light border mt-3 mb-2 translation-area">' +
+                            '<div class="text-muted small mb-1">译文</div>' +
+                            '<p class="card-text mb-0">' + $('<span>').text(response.translated_content).html() + '</p>' +
+                            '</div>';
+                        $card.find('.card-body p.card-text').first().after(html);
+                    } else if (response.message) {
+                        displaySyncMessage(response.message, 'danger');
+                    }
+                },
+                error: function(xhr) {
+                    var errorMsg = xhr.responseJSON ? xhr.responseJSON.message : "翻译失败。";
+                    displaySyncMessage(errorMsg, 'danger');
+                },
+                complete: function() {
+                    $button.prop('disabled', false).text(originalText);
+                }
+            });
         });
 
         $('.col-md-9').on('click', '.forward-btn', function() {

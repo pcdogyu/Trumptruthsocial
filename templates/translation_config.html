@@ -105,11 +105,19 @@
             <input type="text" class="form-control" id="translation_api_url" name="translation_api_url" value="{{.Config.Translation.APIURL}}">
         </div>
         <div class="form-group">
-            <label for="translation_api_key">翻译 API Key:</label>
+            <label for="translation_api_key">翻译 API Key（腾讯云填 SecretId）:</label>
             <input type="password" class="form-control" id="translation_api_key" name="translation_api_key" value="{{.TranslationAPIKeyValue}}">
         </div>
         <div class="form-group">
-            <label for="translation_model">模型名称:</label>
+            <label for="translation_secret_key">SecretKey（腾讯云专用）:</label>
+            <input type="password" class="form-control" id="translation_secret_key" name="translation_secret_key" value="{{.TranslationSecretKeyValue}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_region">地区（腾讯云必填，如 ap-guangzhou）:</label>
+            <input type="text" class="form-control" id="translation_region" name="translation_region" value="{{.Config.Translation.Region}}">
+        </div>
+        <div class="form-group">
+            <label for="translation_model">模型名称（腾讯云留空）:</label>
             <input type="text" class="form-control" id="translation_model" name="translation_model" value="{{.Config.Translation.Model}}">
         </div>
         <div class="form-group">
